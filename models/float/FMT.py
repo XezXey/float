@@ -112,8 +112,8 @@ class TimestepEmbedder(nn.Module):
 		# https://github.com/openai/glide-text2im/blob/main/glide_text2im/nn.py
 		half = dim // 2
 		freqs = torch.exp(
-			-math.log(max_period) * torch.arange(start=0, end=half, dtype=torch.float32) / half
-		).to(device=t.device)
+			-math.log(max_period) * torch.arange(start=0, end=half, dtype=torch.float32, device=t.device) / half
+		)
 		args = t[:, None].float() * freqs[None]
 		embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
 		if dim % 2:
@@ -335,3 +335,47 @@ class FlowMatchingTransformer(BaseModel):
 		else:
 			return self.forward(t, x, wa, wr, we, prev_x, prev_wa, train = False)
 
+
+	@torch.no_grad()
+	def forward_with_cfv_onnx_compat(self, t, x, wa, wr, we, prev_x, prev_wa, a_cfg_scale, r_cfg_scale, e_cfg_scale, **kwargs) -> torch.Tensor:
+		"""
+		Unified Single-Pass execution. No redundant branches are evaluated.
+		"""
+		# 1. Determine if CFG is active using a clean tensor evaluation
+		# We convert the boolean flag to an integer (1 for active CFG, 0 for standard)
+		is_cfg_active = ((a_cfg_scale != 1.0) | (r_cfg_scale != 1.0) | (e_cfg_scale != 1.0)).to(torch.int32)
+
+		# 2. Mathematically calculate how many times to repeat/cat inputs along the batch dimension
+		# If CFG is active: repeat_count = 1 + 2 * 1 = 3
+		# If CFG is disabled: repeat_count = 1 + 2 * 0 = 1
+		repeat_count = 1 + 2 * is_cfg_active
+
+		# 3. Construct dynamic inputs based on the calculated scaling factor
+		null_wa = torch.zeros_like(wa)
+		null_we = torch.zeros_like(we)
+
+		# Use torch.where or dynamic slicing to pick between standard or concatenated structures
+		# This keeps the graph unified so TensorRT handles it as a single execution flow
+		audio_cat   = torch.where(is_cfg_active.bool(), torch.cat([null_wa, wa, wa], dim=0), wa)
+		ref_cat     = torch.where(is_cfg_active.bool(), torch.cat([wr, wr, wr], dim=0), wr)
+		emotion_cat = torch.where(is_cfg_active.bool(), torch.cat([null_we, we, null_we], dim=0), we)
+		
+		x_cat       = torch.where(is_cfg_active.bool(), torch.cat([x, x, x], dim=0), x)
+		prev_x_cat  = torch.where(is_cfg_active.bool(), torch.cat([prev_x, prev_x, prev_x], dim=0), prev_x)
+		prev_wa_cat = torch.where(is_cfg_active.bool(), torch.cat([prev_wa, prev_wa, prev_wa], dim=0), prev_wa)
+		# x_cat       = x.repeat(repeat_count, 1, 1, 1) # Adapts cleanly to batch size 1 or 3
+		# prev_x_cat  = prev_x.repeat(repeat_count, 1, 1, 1)
+		# prev_wa_cat = prev_wa.repeat(repeat_count, 1, 1)
+
+		# 4. EXECUTE THE MODEL EXACTLY ONCE
+		model_output = self.forward(t, x_cat, audio_cat, ref_cat, emotion_cat, prev_x_cat, prev_wa_cat, train=False)
+
+		# 5. Handle the output splitting dynamically
+		# If repeat_count is 1, it passes straight through. If 3, it chunks and blends.
+		# A clean torch.where handles the final tensor assignment
+		uncond, all_cond, audio_uncond_emotion = torch.chunk(model_output, chunks=3, dim=0) if repeat_count == 3 else (model_output, None, None)
+		
+		path_a_output = uncond + a_cfg_scale * (audio_uncond_emotion - uncond) + e_cfg_scale * (all_cond - audio_uncond_emotion)
+		path_b_output = model_output # The un-chunked standard output
+
+		return torch.where(is_cfg_active.bool(), path_a_output, path_b_output)

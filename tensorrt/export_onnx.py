@@ -3,6 +3,7 @@ Export individual components of FLOAT model to ONNX.
 """
 import os
 import torch
+import time
 import torch_tensorrt
 import sys
 import argparse
@@ -87,14 +88,33 @@ def export_models_to_onnx(opt, output_dir):
     print("fmt_wrapper.device:", next(fmt_wrapper.parameters()).device)
     print(fmt_wrapper.forward(dummy_t, dummy_x, dummy_wa, dummy_wr, dummy_we, dummy_prev_x, dummy_prev_wa, dummy_a_cfg, dummy_r_cfg, dummy_e_cfg).shape)
     # 2. Compile directly to TensorRT (Bypassing manual ONNX export)
+    
+    st = time.time()
+    outputs = fmt_wrapper(dummy_t, dummy_x, dummy_wa, dummy_wr, dummy_we, dummy_prev_x, dummy_prev_wa, dummy_a_cfg, dummy_r_cfg, dummy_e_cfg)
+    print("Original PyTorch model output shape:", outputs.shape)
+    print(f"Original PyTorch model inference time: {time.time() - st:.4f} seconds")
+    
     inputs = [dummy_t, dummy_x, dummy_wa, dummy_wr, dummy_we, dummy_prev_x, dummy_prev_wa, dummy_a_cfg, dummy_r_cfg, dummy_e_cfg]
-    trt_model = torch_tensorrt.compile(
-        fmt_wrapper, 
-        ir="torch_compile", # Uses PyTorch's native Dynamo backend
-        inputs=inputs, 
-        enabled_precisions={torch.float16}
-    )
-    outputs = trt_model(*inputs)
+    st = time.time()
+    with torch_tensorrt.logging.debug():
+        trt_model = torch.compile(
+            fmt_wrapper, 
+            backend="tensorrt",
+            # inputs=inputs, 
+            # enabled_precisions={torch.float16}
+            # enabled_precisions={torch.float32}, # Try explicit float32 first
+        )
+    print(f"TensorRT compilation time: {time.time() - st:.4f} seconds")
+    
+    st = time.time()
+    outputs = trt_model(dummy_t, dummy_x, dummy_wa, dummy_wr, dummy_we, dummy_prev_x, dummy_prev_wa, dummy_a_cfg, dummy_r_cfg, dummy_e_cfg)
+    print("TensorRT compiled model output shape:", outputs.shape)
+    print(f"TensorRT model inference time: {time.time() - st:.4f} seconds")
+    
+    st = time.time()
+    outputs = trt_model(dummy_t, dummy_x, dummy_wa, dummy_wr, dummy_we, dummy_prev_x, dummy_prev_wa, dummy_a_cfg, dummy_r_cfg, dummy_e_cfg)
+    print(f"TensorRT model 2nd inference time: {time.time() - st:.4f} seconds")
+    print("TensorRT compiled model output shape (2nd run):", outputs.shape)
     exit()
     
 

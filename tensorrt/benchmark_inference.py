@@ -173,6 +173,7 @@ def run_trt_benchmark(engine_path, dummy_inputs, opt, warmup, iters, batch):
     print(f"  Output shape      : {out_shape_hw}")
 
     # ── allocate I/O tensors ────────────────────────────────────────────────
+    # t_in, x_in, wa_in, wr_in, we_in, px_in, pwa_in, a_cfg_scale_in, r_cfg_scale_in, e_cfg_scale_in = dummy_inputs
     t_in, x_in, wa_in, wr_in, we_in, px_in, pwa_in = dummy_inputs
     io = {
         "t":             t_in.contiguous().cuda().float(),
@@ -182,8 +183,15 @@ def run_trt_benchmark(engine_path, dummy_inputs, opt, warmup, iters, batch):
         "we":            we_in.contiguous().cuda().float(),
         "prev_x":        px_in.contiguous().cuda().float(),
         "prev_wa":       pwa_in.contiguous().cuda().float(),
+        # "a_cfg_scale": a_cfg_scale_in.contiguous().cuda().float(),
+        # "r_cfg_scale": r_cfg_scale_in.contiguous().cuda().float(),
+        # "e_cfg_scale": e_cfg_scale_in.contiguous().cuda().float(),
         "motion_latent": torch.empty(out_shape_hw, dtype=torch.float32, device="cuda"),
     }
+    print("  Input tensors for trt:")
+    for name in ["t", "x", "wa", "wr", "we", "prev_x", "prev_wa"]:
+        t = io[name]
+        print(f"    {name}: {tuple(t.shape)}, dtype={t.dtype}, min={t.min().item():.6f}, max={t.max().item():.6f}, mean={t.mean().item():.6f}")
 
     # Bind tensor addresses (TRT 10.x execute_async_v3 API)
     for name, tensor in io.items():
@@ -408,12 +416,17 @@ def main():
     if not args.skip_baseline:
         print("[1/3] PyTorch FP32 baseline …")
         wrapper = load_fmt_wrapper(args, device)
+        print("  Input shapes:")
+        for tensor in dummy_inputs:
+            print(f"    {tensor.shape}, dtype={tensor.dtype}, min={tensor.min().item():.6f}, max={tensor.max().item():.6f}, mean={tensor.mean().item():.6f}")
         pt_out, pt_s = run_pytorch_baseline(wrapper, dummy_inputs, args.warmup, args.iters)
         del wrapper  # free GPU memory before loading TRT engine
         torch.cuda.empty_cache()
         print(f"  mean={pt_s['mean_ms']:.2f}ms  p50={pt_s['p50_ms']:.2f}ms  "
               f"p95={pt_s['p95_ms']:.2f}ms  p99={pt_s['p99_ms']:.2f}ms  "
               f"fps={pt_s['fps']:.1f}")
+        print(f"  Output shape      : {pt_out.shape}, dtype={pt_out.dtype}")
+        print(f"  Output stats      : min={pt_out.min().item():.6f}  max={pt_out.max().item():.6f}  mean={pt_out.mean().item():.6f}")
     else:
         print("[1/3] PyTorch baseline skipped (--skip_baseline)")
 
@@ -425,6 +438,8 @@ def main():
     print(f"  mean={trt_s['mean_ms']:.2f}ms  p50={trt_s['p50_ms']:.2f}ms  "
           f"p95={trt_s['p95_ms']:.2f}ms  p99={trt_s['p99_ms']:.2f}ms  "
           f"fps={trt_s['fps']:.1f}")
+    print(f"  Output shape      : {trt_out.shape}, dtype={trt_out.dtype}")
+    print(f"  Output stats      : min={trt_out.min().item():.6f}  max={trt_out.max().item():.6f}  mean={trt_out.mean().item():.6f}")
     if pt_s:
         print(f"  Speedup vs FP32 : {pt_s['mean_ms']/trt_s['mean_ms']:.2f}×")
 
@@ -441,6 +456,8 @@ def main():
         print(f"  Relative L2 error : {num['rel_l2']:.4f}   "
               f"({'PASS ✓' if rel_ok else 'WARN ⚠'} ≤{thresh['rel_max']})")
         print(f"  Max absolute error: {num['max_abs_err']:.6f}")
+        print(f"  All close: trt_out vs pt_out: {torch.allclose(trt_out, pt_out, rtol=1e-4, atol=1e-5)}")
+        print(f"  Max diff: {(trt_out - pt_out).abs().max().item():.6f}")
     else:
         print("  Skipped (no baseline output)")
 

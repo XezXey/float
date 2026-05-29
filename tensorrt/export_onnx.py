@@ -61,7 +61,7 @@ def parse_args():
 
     # ── shape options ─────────────────────────────────────────────────────────
     parser.add_argument(
-        "--dynamic_batch", action="store_true",
+        "--dynamic_batch", action="store_true", default=False,
         help="Export with a dynamic batch axis. Needed for variable-batch TRT engines.",
     )
     parser.add_argument("--min_batch", type=int, default=1,
@@ -125,6 +125,7 @@ def main():
     dummy_inputs = build_dummy_inputs(args, device, batch=1, seed=args.input_seed)
 
     # ── build export kwargs ───────────────────────────────────────────────────
+    # input_names  = ["t", "x", "wa", "wr", "we", "prev_x", "prev_wa", "a_cfg_scale", "r_cfg_scale", "e_cfg_scale"]
     input_names  = ["t", "x", "wa", "wr", "we", "prev_x", "prev_wa"]
     output_names = ["motion_latent"]
 
@@ -133,6 +134,7 @@ def main():
         # Batch dimension is dim-0 for all tensors except 't' (shape (1,))
         dynamic_axes = {
             name: {0: "batch_size"}
+            # for name in ["x", "wa", "wr", "we", "prev_x", "prev_wa", "a_cfg_scale", "r_cfg_scale", "e_cfg_scale", "motion_latent"]
             for name in ["x", "wa", "wr", "we", "prev_x", "prev_wa", "motion_latent"]
         }
         print("  Dynamic axes: batch_size on all non-time tensors")
@@ -150,6 +152,7 @@ def main():
 
     # ── trace & export ────────────────────────────────────────────────────────
     print("[2/4] Tracing model (this may take ~10s) …")
+    # t_in, x_in, wa_in, wr_in, we_in, px_in, pwa_in, a_cfg_scale, r_cfg_scale, e_cfg_scale = dummy_inputs
     t_in, x_in, wa_in, wr_in, we_in, px_in, pwa_in = dummy_inputs
     print(f"  Input shapes:")
     for name, t in zip(input_names, dummy_inputs):
@@ -159,6 +162,14 @@ def main():
         # dry-run to confirm forward pass works
         out_ref = wrapper(*dummy_inputs)
     print(f"  Output shape : {tuple(out_ref.shape)}")
+    
+    print("=" * 100)
+    print("[#] Exporting to ONNX …")
+    print("Export kwargs:")
+    for k, v in export_kwargs.items():
+        print(f"  {k}: {v}")
+    print("=" * 100)
+        
 
     with torch.no_grad():
         torch.onnx.export(
@@ -231,6 +242,9 @@ def _write_shapes_json(args, out_ref=None):
             "we":      {"static_shape": [1, 1, dim_e],            "dtype": "float32"},
             "prev_x":  {"static_shape": [1, n_prev, dim_w],      "dtype": "float32"},
             "prev_wa": {"static_shape": [1, n_prev, dim_a],      "dtype": "float32"},
+            # "a_cfg_scale": {"static_shape": [1],                   "dtype": "float32"},
+            # "r_cfg_scale": {"static_shape": [1],                   "dtype": "float32"},
+            # "e_cfg_scale": {"static_shape": [1],                   "dtype": "float32"},
         },
         "output": {
             "motion_latent": {"static_shape": [1, n_out, dim_w], "dtype": "float32"},

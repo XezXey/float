@@ -41,7 +41,7 @@ class FMTWrapper(torch.nn.Module):
         super().__init__()
         self.fmt = fmt
 
-    def forward(self, t, x, wa, wr, we, prev_x, prev_wa):
+    def forward(self, t, x, wa, wr, we, prev_x, prev_wa, a_cfg_scale=2.0, r_cfg_scale=1.0, e_cfg_scale=1.0):
         """
         Args:
             t        : (1,)           ODE timestep in [0, 1]
@@ -74,6 +74,7 @@ class FMTWrapper(torch.nn.Module):
 
         # CFG blend
         return uncond + 2.0 * (audio_uncond - uncond) + 1.0 * (all_cond - audio_uncond)
+        # return uncond + a_cfg_scale * (audio_uncond - uncond) + e_cfg_scale * (all_cond - audio_uncond)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -119,7 +120,7 @@ def build_dummy_inputs(opt, device: torch.device, batch: int = 1, seed: int = 42
     Build random dummy inputs matching FMTWrapper.forward() signature.
 
     Returns a tuple:
-        (t, x, wa, wr, we, prev_x, prev_wa)
+        (t, x, wa, wr, we, prev_x, prev_wa, a_cfg_scale, r_cfg_scale, e_cfg_scale)
 
     Shapes (batch=1):
         t       : (1,)
@@ -129,6 +130,9 @@ def build_dummy_inputs(opt, device: torch.device, batch: int = 1, seed: int = 42
         we      : (1, 1, 7)
         prev_x  : (1, 10, 512)
         prev_wa : (1, 10, 512)
+        a_cfg_scale : (1,)
+        r_cfg_scale : (1,)
+        e_cfg_scale : (1,)
     """
     torch.manual_seed(seed)
     n_curr = int(opt.wav2vec_sec * opt.fps)   # default: 50
@@ -145,6 +149,9 @@ def build_dummy_inputs(opt, device: torch.device, batch: int = 1, seed: int = 42
         torch.randn(batch, 1,     dim_e,  device=device),
         torch.randn(batch, n_prev, dim_w, device=device),
         torch.randn(batch, n_prev, dim_a, device=device),
+        # torch.tensor([2.0], device=device, dtype=torch.float32),  # a_cfg_scale
+        # torch.tensor([1.0], device=device, dtype=torch.float32),  # r_cfg_scale
+        # torch.tensor([1.0], device=device, dtype=torch.float32),  # e_cfg_scale
     )
 
 

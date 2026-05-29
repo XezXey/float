@@ -135,9 +135,9 @@ Precision guide:
 
     # ── precision ─────────────────────────────────────────────────────────────
     parser.add_argument(
-        "--precision", type=str, default="fp16",
+        "--precision", type=str, default="fp32",
         choices=PRECISION_MODES,
-        help="Quantization precision (default: fp16)",
+        help="Quantization precision (default: fp32)",
     )
 
     # ── TensorRT tuning ───────────────────────────────────────────────────────

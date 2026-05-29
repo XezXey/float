@@ -12,3 +12,14 @@ results/
 checkpoints/onnx_models/fmt.onnx
 .gitignore
 checkpoints/trt_engines/fmt_fp16_20260528_162205.engine
+checkpoints/onnx_models/fmt_nocfg.onnx
+checkpoints/onnx_models/fmt_nocfg.onnx.shapes.json
+checkpoints/onnx_models/fmt.onnx.shapes.json
+checkpoints/trt_engines/fmt_fp16_manifest.json
+checkpoints/trt_engines/fmt_fp16_nocfg_manifest.json
+checkpoints/trt_engines/fmt_fp16_nocfg.engine
+checkpoints/trt_engines/fmt_fp16.engine
+checkpoints/trt_engines/fmt_fp32_manifest.json
+checkpoints/trt_engines/fmt_fp32_nocfg_manifest.json
+checkpoints/trt_engines/fmt_fp32_nocfg.engine
+checkpoints/trt_engines/fmt_fp32.engine

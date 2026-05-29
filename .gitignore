@@ -9,3 +9,6 @@ tmp/
 wav2vec2-base-960h/
 wav2vec-english-speech-emotion-recognition/
 results/
+checkpoints/onnx_models/fmt.onnx
+.gitignore
+checkpoints/trt_engines/fmt_fp16_20260528_162205.engine

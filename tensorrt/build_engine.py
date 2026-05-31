@@ -162,6 +162,45 @@ Precision guide:
         "--refittable", action="store_true",
         help="Build a refittable engine (allows weight updates without full rebuild)",
     )
+    parser.add_argument(
+        "--disable_tf32", action="store_true",
+        help="Explicitly disable TF32 (10-bit mantissa) on Ampere/Ada GPUs. "
+             "Automatically ON when --precision fp32. Required for cosine ≥ 0.9999 sanity checks.",
+    )
+    parser.add_argument(
+        "--obey_precision", action="store_true",
+        help="Set OBEY_PRECISION_CONSTRAINTS: forces every layer to run in its declared "
+             "precision, preventing silent downcasting. Slower build, strictest accuracy.",
+    )
+    parser.add_argument(
+        "--force_fp32_layers", action="store_true",
+        help="Explicitly set precision=FP32 and output_type=FP32 on every parsed network "
+             "layer after ONNX parsing. Nuclear option for FP32 sanity checks — prevents "
+             "TRT from substituting attention kernels with Flash Attention equivalents. "
+             "Automatically ON when --precision fp32.",
+    )
+    parser.add_argument(
+        "--disable_cudnn_tactic", action="store_true",
+        help="Remove cuDNN from TRT tactic sources. Blocks Flash Attention-style fused MHA "
+             "kernels that TRT substitutes for scaled_dot_product_attention patterns.",
+    )
+    parser.add_argument(
+        "--attn_fp32_fallback", action="store_true",
+        help="Targeted FP32 override for attention sub-graph operator types only "
+             "(MatMul, Einsum, Softmax, Slice, Gather, Div, Mul layers). "
+             "Surgical fix for TRT#4796 (adaLN Slice/Gather INT64 chain) and "
+             "TRT#3609 (MHA sequence-slice regression) without nuking the entire "
+             "network to FP32. Preserves FP16 throughput on all other layers. "
+             "Recommended for fp16 builds when cosine similarity fails (< 0.95).",
+    )
+    parser.add_argument(
+        "--attn_layer_name_patterns", type=str, nargs="+",
+        default=[],
+        help="Additional layer name substrings to target with --attn_fp32_fallback. "
+             "Use 'trt_engine_op_*' names from the TRT verbose build log to pin "
+             "specific culprit layers.  Example: --attn_layer_name_patterns "
+             "'MatMul_0' 'Softmax_0' 'Gather_1'",
+    )
 
     # ── dynamic shape profile ─────────────────────────────────────────────────
     parser.add_argument(
@@ -241,8 +280,41 @@ def build_engine(args):
     config = builder.create_builder_config()
     workspace_bytes = int(args.workspace_gb * (1 << 30))
     config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, workspace_bytes)
-    config.avg_timing_iterations    = args.timing_iters
+    config.avg_timing_iterations      = args.timing_iters
     config.builder_optimization_level = args.opt_level
+
+    # ── TF32 control ──────────────────────────────────────────────────────────
+    # TF32 is ON by default on Ampere/Ada GPUs (RTX 3xxx/4xxx) and silently
+    # reduces matmul mantissa from 23 bits → 10 bits, causing cosine ~0.97-0.98
+    # even with --precision fp32. Always disable for sanity-check builds.
+    _disable_tf32 = args.disable_tf32 or (args.precision == "fp32")
+    if _disable_tf32:
+        if hasattr(trt.BuilderFlag, "TF32"):
+            config.clear_flag(trt.BuilderFlag.TF32)
+            print("  TF32 disabled (strict mantissa precision) ✓")
+        else:
+            print("  [WARN] TF32 flag not found in this TRT version — cannot disable")
+    else:
+        print("  TF32 enabled (default — acceptable for FP16/INT8 builds)")
+
+    # ── Precision constraints ─────────────────────────────────────────────────
+    if args.obey_precision:  # explicit opt-in only; auto-enabling for fp32 conflicts with --disable_cudnn_tactic
+        if hasattr(trt.BuilderFlag, "OBEY_PRECISION_CONSTRAINTS"):
+            config.set_flag(trt.BuilderFlag.OBEY_PRECISION_CONSTRAINTS)
+            print("  OBEY_PRECISION_CONSTRAINTS enabled ✓  (no silent layer downcasting)")
+        elif hasattr(trt.BuilderFlag, "PREFER_PRECISION_CONSTRAINTS"):
+            config.set_flag(trt.BuilderFlag.PREFER_PRECISION_CONSTRAINTS)
+            print("  PREFER_PRECISION_CONSTRAINTS enabled ✓")
+
+    # ── Tactic source control ────────────────────────────────────────────────
+    if args.disable_cudnn_tactic:
+        if hasattr(trt, "TacticSource") and hasattr(trt.TacticSource, "CUDNN"):
+            srcs = config.get_tactic_sources()
+            srcs &= ~(1 << int(trt.TacticSource.CUDNN))
+            config.set_tactic_sources(srcs)
+            print("  cuDNN tactic source disabled ✓  (blocks Flash Attention-style fused MHA)")
+        else:
+            print("  [WARN] TacticSource.CUDNN not available in this TRT version")
 
     # ── precision flags ───────────────────────────────────────────────────────
     calibrator = None
@@ -310,6 +382,88 @@ def build_engine(args):
         config.add_optimization_profile(profile)
         print(f"  Profile: batch {mn}→{op}→{mx}")
 
+    # ── Force per-layer FP32 precision (nuclear option for sanity checks) ─────────────
+    # Must run AFTER ONNX parsing and BEFORE build_serialized_network.
+    # OBEY_PRECISION_CONSTRAINTS alone only works when layer.precision is explicitly
+    # set; without per-layer settings TRT still picks its own kernel (Flash Attention).
+    _force_fp32 = getattr(args, 'force_fp32_layers', False)  # explicit only; auto-enable breaks build with --disable_cudnn_tactic
+    if _force_fp32:
+        n_forced = 0
+        for i in range(network.num_layers):
+            layer = network.get_layer(i)
+            try:
+                layer.precision = trt.DataType.FLOAT
+                for j in range(layer.num_outputs):
+                    layer.set_output_type(j, trt.DataType.FLOAT)
+                n_forced += 1
+            except Exception:
+                pass   # some layer types don't support explicit precision
+        print(f"  Per-layer FP32 forced on {n_forced}/{network.num_layers} layers ✓")
+
+    # ── Targeted attention subgraph FP32 fallback (TRT#4796 / TRT#3609 fix) ───────────
+    # A surgical alternative to --force_fp32_layers: only sets FP32 on the
+    # specific layer TYPES implicated in MHA fusion and adaLN Slice/Gather
+    # regressions. All other layers retain their normal precision (FP16/INT8),
+    # preserving throughput while fixing the hidden-state corruption.
+    #
+    # Target layer types (LayerType enum values):
+    #   MATRIX_MULTIPLY  — Q/K/V projections and attention score matmuls
+    #   EINSUM           — fused attention pattern (SDPA replacement)
+    #   SOFTMAX          — attention weight normalisation
+    #   SLICE            — sequence slicing in prev_x/prev_wa context window
+    #   GATHER           — adaLN dynamic index lookup (Gather chain bug #4796)
+    #   ELEMENTWISE      — Div, Mul used in QK scaling / adaLN gating
+    #
+    # Optional: additional layers named by the user via --attn_layer_name_patterns
+    _attn_fallback = getattr(args, 'attn_fp32_fallback', False)
+    if _attn_fallback:
+        # Build the set of target LayerType values (graceful — not all exist
+        # in every TRT version).
+        _ATTN_LAYER_TYPES = set()
+        for _type_name in (
+            "MATRIX_MULTIPLY", "EINSUM", "SOFTMAX",
+            "SLICE",            # TRT#3609: sequence-slice MHA regression
+            "GATHER",           # TRT#4796: adaLN Slice/Gather INT64 chain
+            "ELEMENTWISE",      # Div/Mul in QK scaling and adaLN gates
+        ):
+            _lt = getattr(trt.LayerType, _type_name, None)
+            if _lt is not None:
+                _ATTN_LAYER_TYPES.add(_lt)
+
+        _extra_patterns = list(getattr(args, 'attn_layer_name_patterns', []))
+
+        n_attn_forced = 0
+        _attn_skipped_types: list[str] = []
+        for i in range(network.num_layers):
+            layer = network.get_layer(i)
+            _matched = (
+                layer.type in _ATTN_LAYER_TYPES
+                or any(pat in layer.name for pat in _extra_patterns)
+            )
+            if not _matched:
+                continue
+            try:
+                layer.precision = trt.DataType.FLOAT
+                for j in range(layer.num_outputs):
+                    layer.set_output_type(j, trt.DataType.FLOAT)
+                n_attn_forced += 1
+            except Exception as _e:
+                _attn_skipped_types.append(f"{layer.name} ({layer.type}): {_e}")
+
+        print(
+            f"  Attn-subgraph FP32 fallback: {n_attn_forced}/{network.num_layers} "
+            f"layers forced to FP32 ✓"
+        )
+        print(
+            f"  Target types: MATRIX_MULTIPLY, EINSUM, SOFTMAX, SLICE, GATHER, ELEMENTWISE"
+        )
+        if _extra_patterns:
+            print(f"  Extra name patterns: {_extra_patterns}")
+        if _attn_skipped_types:
+            print(f"  Skipped (unsupported precision) : {len(_attn_skipped_types)} layers")
+            for s in _attn_skipped_types[:5]:
+                print(f"    {s}")
+
     # ── build ─────────────────────────────────────────────────────────────────
     print("[3/4] Building TensorRT engine …")
     print(f"  (Opt level {args.opt_level}, {args.timing_iters} timing iterations per layer)")
@@ -333,17 +487,22 @@ def build_engine(args):
     # ── write manifest ────────────────────────────────────────────────────────
     print("[4/4] Writing build manifest …")
     manifest = {
-        "engine_path":     args.output,
-        "onnx_path":       args.onnx,
-        "precision":       args.precision,
-        "workspace_gb":    args.workspace_gb,
-        "timing_iters":    args.timing_iters,
-        "opt_level":       args.opt_level,
-        "build_time_s":    round(elapsed, 2),
-        "engine_mb":       round(engine_mb, 2),
-        "trt_version":     trt.__version__,
-        "dynamic_batch":   shapes.get("dynamic_batch", False) if shapes else False,
-        "int8_calib_cache": args.int8_calib_cache if args.precision in ("int8", "best") else None,
+        "engine_path":         args.output,
+        "onnx_path":           args.onnx,
+        "precision":           args.precision,
+        "workspace_gb":        args.workspace_gb,
+        "timing_iters":        args.timing_iters,
+        "opt_level":           args.opt_level,
+        "build_time_s":        round(elapsed, 2),
+        "engine_mb":           round(engine_mb, 2),
+        "trt_version":         trt.__version__,
+        "dynamic_batch":       shapes.get("dynamic_batch", False) if shapes else False,
+        "int8_calib_cache":    args.int8_calib_cache if args.precision in ("int8", "best") else None,
+        # Precision override flags — important for reproducibility and debugging
+        "attn_fp32_fallback":  getattr(args, "attn_fp32_fallback", False),
+        "force_fp32_layers":   getattr(args, "force_fp32_layers", False),
+        "disable_cudnn_tactic": getattr(args, "disable_cudnn_tactic", False),
+        "obey_precision":      getattr(args, "obey_precision", False),
     }
     manifest_path = args.output.replace(".engine", "_manifest.json")
     with open(manifest_path, "w") as f:

@@ -26,55 +26,64 @@ class FMTWrapper(torch.nn.Module):
     """
     Wraps the FlowMatchingTransformer (FMT) with CFG baked in.
 
-    Classifier-Free Guidance scales used:
-        a_cfg = 2.0  (audio)
-        r_cfg = 1.0  (reference — identity transform)
-        e_cfg = 1.0  (emotion)
+    Two modes, selected at construction time:
 
-    The CFG triple-batching is performed inline, producing a single unified
-    graph that ONNX and TensorRT can trace without dynamic control flow.
+    cfg_as_inputs=False  (default, backward-compatible)
+        a_cfg=2.0 and e_cfg=1.0 are baked as graph constants.
+        forward(t, x, wa, wr, we, prev_x, prev_wa)
 
-    Output shape: (B, num_prev + num_curr, dim_w)  →  e.g. (1, 60, 512)
+    cfg_as_inputs=True  (for dynamic CFG scale export)
+        a_cfg and e_cfg are scalar tensor inputs passed at runtime.
+        forward(t, x, wa, wr, we, prev_x, prev_wa, a_cfg, e_cfg)
+        Export with --cfg_as_inputs flag; call infer(..., a_cfg=2.5, e_cfg=0.8).
+
+    Output shape: (B, num_prev + num_curr, dim_w)  e.g. (1, 60, 512)
     """
 
-    def __init__(self, fmt):
+    def __init__(self, fmt, cfg_as_inputs: bool = False):
         super().__init__()
-        self.fmt = fmt
+        self.fmt           = fmt
+        self.cfg_as_inputs = cfg_as_inputs
 
-    def forward(self, t, x, wa, wr, we, prev_x, prev_wa, a_cfg_scale=2.0, r_cfg_scale=1.0, e_cfg_scale=1.0):
+    def forward(self, t, x, wa, wr, we, prev_x, prev_wa, a_cfg=None, e_cfg=None):
         """
         Args:
-            t        : (1,)           ODE timestep in [0, 1]
-            x        : (B, L, 512)    motion latent (current window)
-            wa       : (B, L, 512)    audio features (current window)
-            wr       : (B, 512)       reference motion latent
-            we       : (B, 1, 7)      emotion latent
-            prev_x   : (B, P, 512)    previous motion context
-            prev_wa  : (B, P, 512)    previous audio context
+            t        : (1,)        ODE timestep in [0, 1]
+            x        : (B, L, 512) motion latent (current window)
+            wa       : (B, L, 512) audio features (current window)
+            wr       : (B, 512)    reference motion latent
+            we       : (B, 1, 7)   emotion latent
+            prev_x   : (B, P, 512) previous motion context
+            prev_wa  : (B, P, 512) previous audio context
+            a_cfg    : (1,) tensor audio CFG scale   [only when cfg_as_inputs=True]
+            e_cfg    : (1,) tensor emotion CFG scale [only when cfg_as_inputs=True]
         Returns:
             Tensor of shape (B, P+L, 512) — predicted vector field
         """
         null_wa = torch.zeros_like(wa)
         null_we = torch.zeros_like(we)
 
-        # Construct CFG batch dimension (3× inputs)
-        audio_cat   = torch.cat([null_wa, wa,      wa      ], dim=0)
-        ref_cat     = torch.cat([wr,      wr,      wr      ], dim=0)
-        emotion_cat = torch.cat([null_we, we,      null_we ], dim=0)
-        x_cat       = torch.cat([x,       x,       x       ], dim=0)
-        px_cat      = torch.cat([prev_x,  prev_x,  prev_x  ], dim=0)
-        pwa_cat     = torch.cat([prev_wa, prev_wa, prev_wa  ], dim=0)
+        audio_cat   = torch.cat([null_wa, wa,     wa      ], dim=0)
+        ref_cat     = torch.cat([wr,      wr,     wr      ], dim=0)
+        emotion_cat = torch.cat([null_we, we,     null_we ], dim=0)
+        x_cat       = torch.cat([x,       x,      x       ], dim=0)
+        px_cat      = torch.cat([prev_x,  prev_x, prev_x  ], dim=0)
+        pwa_cat     = torch.cat([prev_wa, prev_wa,prev_wa  ], dim=0)
 
         out = self.fmt.forward(
             t, x_cat, audio_cat, ref_cat, emotion_cat,
             px_cat, pwa_cat, train=False
-        )  # shape: (3B, P+L, 512)
+        )  # (3B, P+L, 512)
 
         uncond, all_cond, audio_uncond = torch.chunk(out, 3, dim=0)
 
-        # CFG blend
-        return uncond + 2.0 * (audio_uncond - uncond) + 1.0 * (all_cond - audio_uncond)
-        # return uncond + a_cfg_scale * (audio_uncond - uncond) + e_cfg_scale * (all_cond - audio_uncond)
+        if self.cfg_as_inputs:
+            # a_cfg / e_cfg are (1,) scalar tensors — dynamic at runtime
+            return uncond + a_cfg * (audio_uncond - uncond) + e_cfg * (all_cond - audio_uncond)
+        else:
+            # Constants baked into graph — original behaviour, no extra inputs
+            return uncond + 2.0 * (audio_uncond - uncond) + 1.0 * (all_cond - audio_uncond)
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────

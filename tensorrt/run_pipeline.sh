@@ -59,6 +59,9 @@ SKIP_EXPORT=""
 SKIP_BUILD=""
 SKIP_BASELINE=""
 DYNAMIC_BATCH=""
+ATTN_FP32_FALLBACK=""
+DISABLE_CUDNN_TACTIC=""
+OBEY_PRECISION=""
 EXTRA_ARGS=""
 
 # ── parse CLI ─────────────────────────────────────────────────────────────────────
@@ -79,6 +82,9 @@ while [[ $# -gt 0 ]]; do
         --skip_build)       SKIP_BUILD="1";        shift ;;
         --skip_baseline)    SKIP_BASELINE="1";     shift ;;
         --dynamic_batch)    DYNAMIC_BATCH="1";     shift ;;
+        --attn_fp32_fallback)    ATTN_FP32_FALLBACK="1"; shift ;;
+        --disable_cudnn_tactic)  DISABLE_CUDNN_TACTIC="1"; shift ;;
+        --obey_precision)        OBEY_PRECISION="1"; shift ;;
         *)                  EXTRA_ARGS="$EXTRA_ARGS $1"; shift ;;
     esac
 done
@@ -142,6 +148,11 @@ if [[ -n "$SKIP_BUILD" ]]; then
         exit 1
     fi
 else
+    BUILD_FLAGS=""
+    [[ -n "$ATTN_FP32_FALLBACK"   ]] && BUILD_FLAGS="$BUILD_FLAGS --attn_fp32_fallback"
+    [[ -n "$DISABLE_CUDNN_TACTIC" ]] && BUILD_FLAGS="$BUILD_FLAGS --disable_cudnn_tactic"
+    [[ -n "$OBEY_PRECISION"       ]] && BUILD_FLAGS="$BUILD_FLAGS --obey_precision"
+
     python3 "$(dirname "$0")/build_engine.py" \
         --onnx          "$ONNX_PATH"      \
         --output        "$ENGINE_PATH"    \
@@ -151,7 +162,7 @@ else
         --opt_level     "$OPT_LEVEL"      \
         --int8_calib_batches "$CALIB_BATCHES" \
         --ckpt_path     "$CKPT_PATH"      \
-        $EXTRA_ARGS
+        $BUILD_FLAGS $EXTRA_ARGS
 fi
 
 echo ""

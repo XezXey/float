@@ -23,3 +23,6 @@ checkpoints/trt_engines/fmt_fp32_manifest.json
 checkpoints/trt_engines/fmt_fp32_nocfg_manifest.json
 checkpoints/trt_engines/fmt_fp32_nocfg.engine
 checkpoints/trt_engines/fmt_fp32.engine
+accelerate_dev/float_fmt.engine
+accelerate_dev/float_fmt.onnx
+onnx_models/float_fmt.onnx

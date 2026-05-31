@@ -92,6 +92,11 @@ def parse_args():
         "--input_seed", type=int, default=42,
         help="Random seed for dummy inputs used during tracing",
     )
+    parser.add_argument(
+        "--cfg_as_inputs", action="store_true",
+        help="Export a_cfg and e_cfg as dynamic scalar input nodes instead of "
+             "baked constants. Lets you vary CFG scales at runtime without rebuilding.",
+    )
 
     return parser.parse_known_args()[0]
 
@@ -109,7 +114,7 @@ def main():
     print(f"  Output     : {args.output}")
     print(f"  Opset      : {args.opset}")
     print(f"  Dynamic    : {args.dynamic_batch}")
-    print()
+    print(f"  ConstFold   : {not args.no_constant_folding}")
 
     # ── guard existing file ───────────────────────────────────────────────────
     os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
@@ -121,13 +126,24 @@ def main():
 
     # ── load model ────────────────────────────────────────────────────────────
     print("[1/4] Loading model …")
-    wrapper      = load_fmt_wrapper(args, device)
-    dummy_inputs = build_dummy_inputs(args, device, batch=1, seed=args.input_seed)
+    from _fmt_utils import FMTWrapper as _FMTWrapper
+    _base_wrapper  = load_fmt_wrapper(args, device)   # loads checkpoint into FLOAT
+    # Rebuild wrapper with cfg_as_inputs flag
+    wrapper        = _FMTWrapper(fmt=_base_wrapper.fmt, cfg_as_inputs=args.cfg_as_inputs).to(device)
+    wrapper.eval()
+    dummy_inputs   = build_dummy_inputs(args, device, batch=1, seed=args.input_seed)
 
     # ── build export kwargs ───────────────────────────────────────────────────
-    # input_names  = ["t", "x", "wa", "wr", "we", "prev_x", "prev_wa", "a_cfg_scale", "r_cfg_scale", "e_cfg_scale"]
     input_names  = ["t", "x", "wa", "wr", "we", "prev_x", "prev_wa"]
     output_names = ["motion_latent"]
+
+    if args.cfg_as_inputs:
+        # Append scalar CFG tensors to inputs so they become ONNX nodes
+        a_cfg_t = torch.tensor([2.0], device=device)
+        e_cfg_t = torch.tensor([1.0], device=device)
+        dummy_inputs = dummy_inputs + (a_cfg_t, e_cfg_t)
+        input_names += ["a_cfg", "e_cfg"]
+        print("  CFG scalars   : a_cfg and e_cfg as dynamic input nodes")
 
     dynamic_axes = None
     if args.dynamic_batch:

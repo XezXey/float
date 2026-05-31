@@ -26,3 +26,5 @@ checkpoints/trt_engines/fmt_fp32.engine
 accelerate_dev/float_fmt.engine
 accelerate_dev/float_fmt.onnx
 onnx_models/float_fmt.onnx
+onnx_models/fmt_onnx_noconsfold.onnx
+onnx_models/fmt_onnx.onnx

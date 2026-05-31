@@ -62,7 +62,10 @@ class ONNXPredictor:
             self.providers = ["CPUExecutionProvider"]
             
         print(f"[ONNXPredictor] Initializing session with providers: {self.providers}")
-        self.session = ort.InferenceSession(self.model_path, providers=self.providers)
+        self.session_options = ort.SessionOptions()
+        self.session_options.log_severity_level = 3  # Suppress INFO and WARNING logs from ONNX Runtime, 0 = VERBOSE, 1 = INFO, 2 = WARNING, 3 = ERROR
+        self.session = ort.InferenceSession(self.model_path, providers=self.providers, sess_options=self.session_options)
+
         
         # Log which provider was actually chosen by ONNX Runtime
         active_providers = self.session.get_providers()

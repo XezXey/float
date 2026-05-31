@@ -1,10 +1,14 @@
 import os
+import time
+import tqdm
 
 import torch, math
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 import onnxruntime as ort
+
+from accelerate_dev._fmt_utils import load_fmt_wrapper, build_dummy_inputs, add_model_args
 
 from torchdiffeq import odeint
 from transformers import Wav2Vec2Config
@@ -70,17 +74,17 @@ class FLOAT(BaseModel):
             
 		print(f"[ONNXPredictor] Initializing session with providers: {self.providers}")
 		self.session_options = ort.SessionOptions()
-		self.session_options.log_severity_level = 3  # Suppress INFO and WARNING logs from ONNX Runtime, 0 = VERBOSE, 1 = INFO, 2 = WARNING, 3 = ERROR
+		self.session_options.log_severity_level = 1  # Suppress INFO and WARNING logs from ONNX Runtime, 0 = VERBOSE, 1 = INFO, 2 = WARNING, 3 = ERROR
 		self.fmt_onnx_session = ort.InferenceSession(self.onnx_model_path, providers=self.providers, sess_options=self.session_options)
 		self.fmt_onnx_inputs = self.fmt_onnx_session.get_inputs()
 		self.fmt_onnx_outputs = self.fmt_onnx_session.get_outputs()
-  
+		print(f"[ONNXPredictor] fmt_onnx_inputs: {[inp.name for inp in self.fmt_onnx_inputs]}")
+		print(f"[ONNXPredictor] fmt_onnx_outputs: {[out.name for out in self.fmt_onnx_outputs]}")
+
 		# Save input names for quick access during run
 		self.fmt_onnx_input_names = [inp.name for inp in self.fmt_onnx_inputs]
 		self.fmt_onnx_output_name = self.fmt_onnx_outputs[0].name
 
-
-        
 		# Log which provider was actually chosen by ONNX Runtime
 		active_providers = self.fmt_onnx_session.get_providers()
 		print("="*100)
@@ -89,7 +93,30 @@ class FLOAT(BaseModel):
 		print(f"[ONNXPredictor] Output name: '{self.fmt_onnx_output_name}'")
 		print("="*100)
   
-	
+		self.warmup_onnx_runtime()
+  
+	@torch.no_grad()
+	def warmup_onnx_runtime(self):
+		print("[ONNXPredictor] Warming up ONNX Runtime with dummy inputs...")
+
+		dummy_inputs = build_dummy_inputs(self.opt, device='cuda', batch=1)
+		feed_dict = {
+			"t": dummy_inputs[0].cpu().numpy().astype(np.float32),
+			"x": dummy_inputs[1].cpu().numpy().astype(np.float32),
+			"wa": dummy_inputs[2].cpu().numpy().astype(np.float32),
+			"wr": dummy_inputs[3].cpu().numpy().astype(np.float32),
+			"we": dummy_inputs[4].cpu().numpy().astype(np.float32),
+			"prev_x": dummy_inputs[5].cpu().numpy().astype(np.float32),
+			"prev_wa": dummy_inputs[6].cpu().numpy().astype(np.float32),
+		}
+
+		start_time = time.time()
+		for i in tqdm.tqdm(range(100)):
+			_ = self.fmt_onnx_session.run([self.fmt_onnx_output_name], feed_dict)
+		end_time = time.time()
+		print(f"[ONNXPredictor] Warmup completed in {end_time - start_time:.2f} seconds.")
+ 
+ 
 	######## Motion Encoder - Decoder ########
 	@torch.no_grad()
 	def encode_image_into_latent(self, x: torch.Tensor) -> list:

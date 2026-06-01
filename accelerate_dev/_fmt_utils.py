@@ -45,7 +45,8 @@ class FMTWrapper(torch.nn.Module):
         self.fmt           = fmt
         self.cfg_as_inputs = cfg_as_inputs
 
-    def forward(self, t, x, wa, wr, we, prev_x, prev_wa, a_cfg=None, e_cfg=None):
+    # def forward(self, t, x, wa, wr, we, prev_x, prev_wa, a_cfg=2.0, r_cfg=1.0, e_cfg=1.0):
+    def forward(self, t, x, wa, wr, we, prev_x, prev_wa, a_cfg_scale=2.0, e_cfg_scale=1.0):
         """
         Args:
             t        : (1,)        ODE timestep in [0, 1]
@@ -55,8 +56,8 @@ class FMTWrapper(torch.nn.Module):
             we       : (B, 1, 7)   emotion latent
             prev_x   : (B, P, 512) previous motion context
             prev_wa  : (B, P, 512) previous audio context
-            a_cfg    : (1,) tensor audio CFG scale   [only when cfg_as_inputs=True]
-            e_cfg    : (1,) tensor emotion CFG scale [only when cfg_as_inputs=True]
+            a_cfg_scale    : (1,) tensor audio CFG scale   [only when cfg_as_inputs=True]
+            e_cfg_scale    : (1,) tensor emotion CFG scale [only when cfg_as_inputs=True]
         Returns:
             Tensor of shape (B, P+L, 512) — predicted vector field
         """
@@ -77,12 +78,14 @@ class FMTWrapper(torch.nn.Module):
 
         uncond, all_cond, audio_uncond = torch.chunk(out, 3, dim=0)
 
-        if self.cfg_as_inputs:
-            # a_cfg / e_cfg are (1,) scalar tensors — dynamic at runtime
-            return uncond + a_cfg * (audio_uncond - uncond) + e_cfg * (all_cond - audio_uncond)
-        else:
-            # Constants baked into graph — original behaviour, no extra inputs
-            return uncond + 2.0 * (audio_uncond - uncond) + 1.0 * (all_cond - audio_uncond)
+        return uncond + a_cfg_scale * (audio_uncond - uncond) + e_cfg_scale * (all_cond - audio_uncond)
+    
+        # if self.cfg_as_inputs:
+        #     # a_cfg / e_cfg are (1,) scalar tensors — dynamic at runtime
+        #     return uncond + a_cfg * (audio_uncond - uncond) + e_cfg * (all_cond - audio_uncond)
+        # else:
+        #     # Constants baked into graph — original behaviour, no extra inputs
+        #     return uncond + 2.0 * (audio_uncond - uncond) + 1.0 * (all_cond - audio_uncond)
 
 
 
@@ -129,7 +132,7 @@ def build_dummy_inputs(opt, device: torch.device, batch: int = 1, seed: int = 42
     Build random dummy inputs matching FMTWrapper.forward() signature.
 
     Returns a tuple:
-        (t, x, wa, wr, we, prev_x, prev_wa, a_cfg_scale, r_cfg_scale, e_cfg_scale)
+        (t, x, wa, wr, we, prev_x, prev_wa, a_cfg_scale, e_cfg_scale)
 
     Shapes (batch=1):
         t       : (1,)
@@ -140,7 +143,6 @@ def build_dummy_inputs(opt, device: torch.device, batch: int = 1, seed: int = 42
         prev_x  : (1, 10, 512)
         prev_wa : (1, 10, 512)
         a_cfg_scale : (1,)
-        r_cfg_scale : (1,)
         e_cfg_scale : (1,)
     """
     torch.manual_seed(seed)
@@ -158,9 +160,8 @@ def build_dummy_inputs(opt, device: torch.device, batch: int = 1, seed: int = 42
         torch.randn(batch, 1,     dim_e,  device=device),
         torch.randn(batch, n_prev, dim_w, device=device),
         torch.randn(batch, n_prev, dim_a, device=device),
-        # torch.tensor([2.0], device=device, dtype=torch.float32),  # a_cfg_scale
-        # torch.tensor([1.0], device=device, dtype=torch.float32),  # r_cfg_scale
-        # torch.tensor([1.0], device=device, dtype=torch.float32),  # e_cfg_scale
+        torch.tensor([2.0], device=device, dtype=torch.float32),  # a_cfg_scale
+        torch.tensor([1.0], device=device, dtype=torch.float32),  # e_cfg_scale
     )
 
 

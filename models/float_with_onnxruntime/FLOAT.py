@@ -117,6 +117,8 @@ class FLOAT(BaseModel):
 			"we": dummy_inputs[4].cpu().numpy().astype(np.float32),
 			"prev_x": dummy_inputs[5].cpu().numpy().astype(np.float32),
 			"prev_wa": dummy_inputs[6].cpu().numpy().astype(np.float32),
+			"a_cfg_scale": dummy_inputs[7].cpu().numpy().astype(np.float32),
+			"e_cfg_scale": dummy_inputs[8].cpu().numpy().astype(np.float32)
 		}
 
 		start_time = time.time()
@@ -250,9 +252,8 @@ class FLOAT(BaseModel):
 			"we": we.cpu().numpy().astype(np.float32),
 			"prev_x": prev_x.cpu().numpy().astype(np.float32),
 			"prev_wa": prev_wa.cpu().numpy().astype(np.float32),
-			# "a_cfg_scale": np.array(a_cfg_scale, dtype=np.float32),
-			# "r_cfg_scale": np.array(r_cfg_scale, dtype=np.float32),
-			# "e_cfg_scale": np.array(e_cfg_scale, dtype=np.float32)
+			"a_cfg_scale": np.array([a_cfg_scale], dtype=np.float32),
+			"e_cfg_scale": np.array([e_cfg_scale], dtype=np.float32)
 		}
 		ort_outputs = self.fmt_onnx_session.run([self.fmt_onnx_output_name], feed_dict)
 		output_numpy = ort_outputs[0]

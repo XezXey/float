@@ -197,6 +197,8 @@ class InferenceOptions(BaseOptions):
 				default="./checkpoints/float.pth", type=str, help='checkpoint path')
 		parser.add_argument('--res_dir',
 				default="./results", type=str, help='result dir')
+		parser.add_argument('--seed_everything', default=False,
+				action='store_true', help='seed everything for reproducibility')
 		return parser
 
 
@@ -220,7 +222,8 @@ if __name__ == '__main__':
 	else:
 		res_video_path = opt.res_video_path
 
-	seed_everything(opt.seed)
+	if opt.seed_everything:
+		seed_everything(opt.seed)
 	start = time.time()
 	agent.run_inference(
 		res_video_path,

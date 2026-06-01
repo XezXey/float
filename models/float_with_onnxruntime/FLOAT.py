@@ -238,9 +238,9 @@ class FLOAT(BaseModel):
 		we,
 		prev_x,
 		prev_wa,
-		a_cfg_scale = None,
-		r_cfg_scale = None,
-		e_cfg_scale = None
+		a_cfg_scale,
+		r_cfg_scale,
+		e_cfg_scale
 	):
 		feed_dict = {
 			"t": t.cpu().numpy().astype(np.float32),

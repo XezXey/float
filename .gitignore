@@ -31,4 +31,4 @@ onnx_models/fmt_onnx.onnx
 onnx_models/fmt_onnx_bool.onnx
 onnx_models/fmt_onnx_maskfill.onnx
 experiment/onnxruntime/
-extra_asests/
+extra_assests/

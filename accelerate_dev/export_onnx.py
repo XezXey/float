@@ -95,7 +95,7 @@ def main():
     print(f"Generating dummy inputs with batch size = {args.batch_size}...")
     dummy_inputs = build_dummy_inputs(args, device, batch=args.batch_size)
     
-    t, x, wa, wr, we, prev_x, prev_wa = dummy_inputs
+    t, x, wa, wr, we, prev_x, prev_wa, a_cfg_scale, r_cfg_scale, e_cfg_scale = dummy_inputs
     print(f"Input shapes:")
     print(f"  t       : {list(t.shape)}")
     print(f"  x       : {list(x.shape)}")
@@ -104,9 +104,12 @@ def main():
     print(f"  we      : {list(we.shape)}")
     print(f"  prev_x  : {list(prev_x.shape)}")
     print(f"  prev_wa : {list(prev_wa.shape)}")
+    print(f"  a_cfg_scale : {a_cfg_scale.item()}")
+    print(f"  r_cfg_scale : {r_cfg_scale.item()}")
+    print(f"  e_cfg_scale : {e_cfg_scale.item()}")
 
     # 4. Define input names, output names, and dynamic axes
-    input_names = ["t", "x", "wa", "wr", "we", "prev_x", "prev_wa"]
+    input_names = ["t", "x", "wa", "wr", "we", "prev_x", "prev_wa", "a_cfg_scale", "r_cfg_scale", "e_cfg_scale"]
     output_names = ["output"]
 
     dynamic_axes = None

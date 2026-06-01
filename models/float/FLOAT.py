@@ -173,8 +173,13 @@ class FLOAT(BaseModel):
 		sample = self.sample(data, a_cfg_scale = a_cfg_scale, r_cfg_scale = r_cfg_scale, e_cfg_scale = e_cfg_scale, emo = emo, nfe = nfe, seed = seed)
 		end = time.time()
 		print(f"[#FLOAT]> Sampling completed in {end - start:.2f} seconds.")
+		dec_start = time.time()
 		data_out = self.decode_latent_into_image(s_r = s_r, s_r_feats = s_r_feats, r_d = sample)
-		print(f"[#FLOAT]> Achieved FPS = {data_out['d_hat'].shape[1] / (end - start):.2f} frames/sec.")
+		dec_end = time.time()
+		print(f"[#FLOAT]> Decoding completed in {dec_end - dec_start:.2f} seconds.")
+		print(f"[#FLOAT]> FPS (Sampling) = {data_out['d_hat'].shape[0] / (end - start):.2f} frames/sec.")
+		print(f"[#FLOAT]> FPS (Decoding) = {data_out['d_hat'].shape[0] / (dec_end - dec_start):.2f} frames/sec.")
+		print(f"[#FLOAT]> Video's shapes: {data_out['d_hat'].shape}")
 		return data_out
 
 

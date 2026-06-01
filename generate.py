@@ -8,9 +8,11 @@ import albumentations as A
 import albumentations.pytorch.transforms as A_pytorch
 
 from tqdm import tqdm
+import time
 from pathlib import Path
 from transformers import Wav2Vec2FeatureExtractor
 
+from models.utils import seed_everything
 from models.float.FLOAT import FLOAT
 from options.base_options import BaseOptions
 
@@ -105,18 +107,19 @@ class InferenceAgent:
 		del state_dict
 
 	def save_video(self, vid_target_recon: torch.Tensor, video_path: str, audio_path: str) -> str:
+		os.makedirs(video_path, exist_ok=True)
 		with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as temp_video:
 			temp_filename = temp_video.name
 			vid = vid_target_recon.permute(0, 2, 3, 1)
 			vid = vid.detach().clamp(-1, 1).cpu()
 			vid = ((vid + 1) / 2 * 255).type('torch.ByteTensor')
 			torchvision.io.write_video(temp_filename, vid, fps=self.opt.fps)			
-			print(audio_path, video_path)
 			if audio_path is not None:
 				print("FOUND AUDIO")
 				
 				with open(os.devnull, 'wb') as f:
-					command =  "ffmpeg -i {} -i {} -c:v copy -c:a aac {} -y".format(temp_filename, audio_path, video_path)
+					out_name = f'seed={self.opt.seed}_{os.path.basename(self.opt.ref_path).split(".")[0]}_with_{os.path.basename(self.opt.aud_path).split(".")[0]}.mp4'
+					command =  "ffmpeg -i {} -i {} -c:v copy -c:a aac {}/{} -y".format(temp_filename, audio_path, video_path, out_name)
 					subprocess.call(command, shell=True, stdout=f, stderr=f)
 				if os.path.exists(video_path):
 					os.remove(temp_filename)
@@ -144,6 +147,8 @@ class InferenceAgent:
 		if verbose: print(f"> [Done] Preprocess.")
 
 		# inference
+		start_inf = time.time()
+		# inference = Whole FLOAT (audio encoder + image encoder + motion autoencoder + FMT sampling + decoder)
 		d_hat = self.G.inference(
 			data 		= data,
 			a_cfg_scale = a_cfg_scale,
@@ -153,8 +158,14 @@ class InferenceAgent:
 			nfe			= nfe,
 			seed		= seed
 			)['d_hat']
+		end_inf = time.time()
+		print(f"> [#FLOAT] Inference completed () in {end_inf - start_inf:.2f} seconds.")
+		print(f"> [#FLOAT] Inference FPS = {d_hat.shape[0] / (end_inf - start_inf):.2f} frames/sec.")
 
+		start_save = time.time()
 		res_video_path = self.save_video(d_hat, res_video_path, audio_path)
+		end_save = time.time()
+		print(f"> [#FLOAT] Video saving completed in {end_save - start_save:.2f} seconds.")
 		if verbose: print(f"> [Done] result saved at {res_video_path}")
 		return res_video_path
 
@@ -202,6 +213,8 @@ if __name__ == '__main__':
 	else:
 		res_video_path = opt.res_video_path
 
+	seed_everythng(opt.seed)
+	start = time.time()
 	agent.run_inference(
 		res_video_path,
 		ref_path,
@@ -214,4 +227,6 @@ if __name__ == '__main__':
 		no_crop 	= opt.no_crop,
 		seed 		= opt.seed
 		)
-
+	
+	end = time.time()
+	print(f"> [#FLOAT] Total execution (Preprocess + FLOAT + Save) time: {end - start:.2f} seconds.")

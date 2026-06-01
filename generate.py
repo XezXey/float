@@ -213,7 +213,7 @@ if __name__ == '__main__':
 	else:
 		res_video_path = opt.res_video_path
 
-	seed_everythng(opt.seed)
+	seed_everything(opt.seed)
 	start = time.time()
 	agent.run_inference(
 		res_video_path,

@@ -26,6 +26,13 @@ def main():
     
     # Model and input options
     parser.add_argument(
+        "--quantize",
+        action="store_true",
+        default=False,
+        help="Whether to perform post-export quantization to int8 using ONNX Runtime's quantization tools."
+    )
+    
+    parser.add_argument(
         "--ckpt_path",
         type=str,
         default="./checkpoints/float.pth",
@@ -142,7 +149,27 @@ def main():
         dynamic_axes=dynamic_axes,
     )
     
-    print(f"Successfully exported ONNX model to: {output_path}")
+    # 6. Quantize (optional, controlled by a flag)
+    if args.quantize:
+        from onnxruntime.quantization import quantize_dynamic, QuantType
+        from onnxruntime.quantization.shape_inference import quant_pre_process
+        from pathlib import Path
+
+        pre_path = Path(output_path).stem + "_preprocessed.onnx"
+        quant_path = Path(output_path).stem + "_int8.onnx"
+
+        print("Pre-processing for quantization...")
+        quant_pre_process(output_path, pre_path)
+        
+        print("Quantizing...")
+        quantize_dynamic(
+            model_input=pre_path,
+            model_output=quant_path,
+            weight_type=QuantType.QInt8,
+        )
+        print(f"Quantized model saved → {quant_path}")
+        
+        print(f"Successfully exported ONNX model to: {output_path}")
 
 
 if __name__ == "__main__":

@@ -1,4 +1,5 @@
 import os, math, torch
+from time import time
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -327,7 +328,11 @@ class FlowMatchingTransformer(BaseModel):
 			prev_x_cat  = torch.cat([prev_x, prev_x, prev_x], dim=0)
 			prev_wa_cat = torch.cat([prev_wa, prev_wa, prev_wa], dim=0)
 
+			import time
+			st = time.time()
 			model_output = self.forward(t, x, audio_cat, ref_cat, emotion_cat, prev_x_cat, prev_wa_cat, train=False)
+			et = time.time()
+			print(f"> [#FMT] Forward pass completed in {et - st:.2f} seconds.")
 			uncond, all_cond, audio_uncond_emotion = torch.chunk(model_output, chunks=3, dim=0)
 
 			# Classifier-free vector field (cfv) incremental manner

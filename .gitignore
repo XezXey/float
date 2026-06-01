@@ -33,3 +33,9 @@ onnx_models/fmt_onnx_maskfill.onnx
 experiment/onnxruntime/
 extra_assests/
 onnx_models/fmt_onnx_maskfill_addcfg.onnx
+fmt_onnx_maskfill_addcfg_preprocessed.onnx
+fmt_onnx_maskfill_addcfg_int8.onnx
+trtexec_installer/nv-tensorrt-local-repo-ubuntu2204-11.0.0-cuda-12.9_1.0-1_amd64.deb
+trtexec_installer/nv-tensorrt-local-repo-ubuntu2204-10.16.1-cuda-12.9_1.0-1_amd64.deb
+trtexec_installer/nv-tensorrt-local-repo-ubuntu2204-10.0.0-cuda-11.8_1.0-1_amd64.deb
+trt_models/fmt_onnx_maskfill_addcfg.trt

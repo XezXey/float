@@ -68,6 +68,13 @@ class FLOAT(BaseModel):
 			# Configure execution providers
 			if onnx_provider == "cuda":
 				self.providers = [
+        			("TensorrtExecutionProvider", {
+        			    "device_id": 0,
+        			    "trt_max_workspace_size": 2 * 1024 * 1024 * 1024,
+        			    "trt_fp16_enable": True,
+        			    "trt_engine_cache_enable": True,
+        			    "trt_engine_cache_path": "./trt_cache",
+        			}),
 					("CUDAExecutionProvider", {
 						"device_id": 0,
 						"arena_extend_strategy": "kNextPowerOfTwo",
@@ -94,7 +101,6 @@ class FLOAT(BaseModel):
 			self.fmt_onnx_output_name = self.fmt_onnx_outputs[0].name
 
 			# Log which provider was actually chosen by ONNX Runtime
-			active_providers = self.fmt_onnx_session.get_providers()
 			print("="*100)
 			print(f"[ONNXPredictor] Session successfully created. Active providers: {self.fmt_onnx_session.get_providers()}")
 			print(f"[ONNXPredictor] Inputs expected: {self.fmt_onnx_input_names}")

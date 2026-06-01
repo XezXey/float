@@ -14,7 +14,10 @@ def enc_dec_mask(T, S, frame_width = 1, expansion = 2):
 	for i in range(T):
 		mask[i, max(0, (i - expansion) * frame_width):(i + expansion + 1) * frame_width] = 0
 	# return mask == 1
-	return (mask == 1).float()
+	# return (mask == 1).float()
+	mask = mask.masked_fill(mask.bool(), float('-inf'))
+	return mask
+
 
 
 def get_sinusoid_encoding_table(n_position, d_hid, padding_idx=None):
@@ -73,7 +76,8 @@ class Attention(nn.Module):
 			x = F.scaled_dot_product_attention(
 				q, k, v,
 				# attn_mask = ~mask,
-				attn_mask = 1 - mask,
+				# attn_mask = 1 - mask,
+				attn_mask = mask,
 				dropout_p=self.attn_drop.p if self.training else 0.,
 			)
 		else:

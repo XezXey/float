@@ -8,7 +8,6 @@ import torch.nn.functional as F
 import numpy as np
 import onnxruntime as ort
 
-from accelerate_dev._fmt_utils import load_fmt_wrapper, build_dummy_inputs, add_model_args
 
 from torchdiffeq import odeint
 from transformers import Wav2Vec2Config
@@ -18,12 +17,12 @@ from models.wav2vec2 import Wav2VecModel
 from models.wav2vec2_ser import Wav2Vec2ForSpeechClassification
 
 from models import BaseModel
-from models.float.generator import Generator
-from models.float.FMT import FlowMatchingTransformer
+from models.float_with_onnxruntime.generator import Generator
+from models.float_with_onnxruntime.FMT import FlowMatchingTransformer
 
 ######## Main Phase 2 model ########		
 class FLOAT(BaseModel):
-	def __init__(self, opt, onnx_model_path: str, onnx_provider: str = "cuda"):
+	def __init__(self, opt, onnx_model_path: str = None, onnx_provider: str = "cuda"):
 		super().__init__()
 		self.opt = opt
 
@@ -49,56 +48,66 @@ class FLOAT(BaseModel):
 		}
   
 		# ONNX Runtime session for forward_with_cfv
-		self.onnx_model_path = onnx_model_path
-        
-		if not os.path.isfile(self.onnx_model_path):
-			raise FileNotFoundError(
-                f"ONNX model file not found at '{self.onnx_model_path}'. "
-                "Please run export_onnx.py to export it first."
-            )
-            
-        # Configure execution providers
-		if onnx_provider == "cuda":
-			self.providers = [
-                ("CUDAExecutionProvider", {
-                    "device_id": 0,
-                    "arena_extend_strategy": "kNextPowerOfTwo",
-                    "gpu_mem_limit": 2 * 1024 * 1024 * 1024,
-                    "cudnn_conv_algo_search": "EXHAUSTIVE",
-                    "do_copy_in_default_stream": True,
-                }),
-                "CPUExecutionProvider"
-            ]
+		if onnx_model_path is None:
+			print("[#] No ONNX model path provided. Using PyTorch implementation. (For accelerate_dev/onnx_export.py)")
 		else:
-			self.providers = ["CPUExecutionProvider"]
-            
-		print(f"[ONNXPredictor] Initializing session with providers: {self.providers}")
-		self.session_options = ort.SessionOptions()
-		self.session_options.log_severity_level = 1  # Suppress INFO and WARNING logs from ONNX Runtime, 0 = VERBOSE, 1 = INFO, 2 = WARNING, 3 = ERROR
-		self.fmt_onnx_session = ort.InferenceSession(self.onnx_model_path, providers=self.providers, sess_options=self.session_options)
-		self.fmt_onnx_inputs = self.fmt_onnx_session.get_inputs()
-		self.fmt_onnx_outputs = self.fmt_onnx_session.get_outputs()
-		print(f"[ONNXPredictor] fmt_onnx_inputs: {[inp.name for inp in self.fmt_onnx_inputs]}")
-		print(f"[ONNXPredictor] fmt_onnx_outputs: {[out.name for out in self.fmt_onnx_outputs]}")
+			print("#"*100)
+			print(f"[#] Initializing ONNX Runtime session with model: {onnx_model_path} and provider: {onnx_provider}")
+			self.init_onnx_runtime(onnx_model_path, onnx_provider)
+			print("#"*100)
+   
+	def init_onnx_runtime(self, onnx_model_path: str, onnx_provider: str):
+			self.onnx_model_path = onnx_model_path
+			
+			if not os.path.isfile(self.onnx_model_path):
+				raise FileNotFoundError(
+					f"ONNX model file not found at '{self.onnx_model_path}'. "
+					"Please run export_onnx.py to export it first."
+				)
+				
+			# Configure execution providers
+			if onnx_provider == "cuda":
+				self.providers = [
+					("CUDAExecutionProvider", {
+						"device_id": 0,
+						"arena_extend_strategy": "kNextPowerOfTwo",
+						"gpu_mem_limit": 2 * 1024 * 1024 * 1024,
+						"cudnn_conv_algo_search": "EXHAUSTIVE",
+						"do_copy_in_default_stream": True,
+					}),
+					"CPUExecutionProvider"
+				]
+			else:
+				self.providers = ["CPUExecutionProvider"]
+				
+			print(f"[ONNXPredictor] Initializing session with providers: {self.providers}")
+			self.session_options = ort.SessionOptions()
+			self.session_options.log_severity_level = 3  # Suppress INFO and WARNING logs from ONNX Runtime, 0 = VERBOSE, 1 = INFO, 2 = WARNING, 3 = ERROR
+			self.fmt_onnx_session = ort.InferenceSession(self.onnx_model_path, providers=self.providers, sess_options=self.session_options)
+			self.fmt_onnx_inputs = self.fmt_onnx_session.get_inputs()
+			self.fmt_onnx_outputs = self.fmt_onnx_session.get_outputs()
+			print(f"[ONNXPredictor] fmt_onnx_inputs: {[inp.name for inp in self.fmt_onnx_inputs]}")
+			print(f"[ONNXPredictor] fmt_onnx_outputs: {[out.name for out in self.fmt_onnx_outputs]}")
 
-		# Save input names for quick access during run
-		self.fmt_onnx_input_names = [inp.name for inp in self.fmt_onnx_inputs]
-		self.fmt_onnx_output_name = self.fmt_onnx_outputs[0].name
+			# Save input names for quick access during run
+			self.fmt_onnx_input_names = [inp.name for inp in self.fmt_onnx_inputs]
+			self.fmt_onnx_output_name = self.fmt_onnx_outputs[0].name
 
-		# Log which provider was actually chosen by ONNX Runtime
-		active_providers = self.fmt_onnx_session.get_providers()
-		print("="*100)
-		print(f"[ONNXPredictor] Session successfully created. Active providers: {self.fmt_onnx_session.get_providers()}")
-		print(f"[ONNXPredictor] Inputs expected: {self.fmt_onnx_input_names}")
-		print(f"[ONNXPredictor] Output name: '{self.fmt_onnx_output_name}'")
-		print("="*100)
-  
-		self.warmup_onnx_runtime()
+			# Log which provider was actually chosen by ONNX Runtime
+			active_providers = self.fmt_onnx_session.get_providers()
+			print("="*100)
+			print(f"[ONNXPredictor] Session successfully created. Active providers: {self.fmt_onnx_session.get_providers()}")
+			print(f"[ONNXPredictor] Inputs expected: {self.fmt_onnx_input_names}")
+			print(f"[ONNXPredictor] Output name: '{self.fmt_onnx_output_name}'")
+			print("="*100)
+	
+			self.warmup_onnx_runtime()
   
 	@torch.no_grad()
 	def warmup_onnx_runtime(self):
 		print("[ONNXPredictor] Warming up ONNX Runtime with dummy inputs...")
 
+		from accelerate_dev._fmt_utils import load_fmt_wrapper, build_dummy_inputs, add_model_args
 		dummy_inputs = build_dummy_inputs(self.opt, device='cuda', batch=1)
 		feed_dict = {
 			"t": dummy_inputs[0].cpu().numpy().astype(np.float32),
@@ -197,18 +206,6 @@ class FLOAT(BaseModel):
 				wa_t = F.pad(wa_t, (0, 0, 0, self.num_frames_for_clip - wa_t.shape[1]), mode='replicate')
 
 			def sample_chunk(tt, zt):
-				# out = self.fmt.forward_with_cfv(
-				# 		t 			= tt.unsqueeze(0),
-				# 		x 			= zt,
-				# 		wa 			= wa_t, 			 
-				# 		wr 			= r_s,
-				# 		we 			= we, 
-				# 		prev_x 		= prev_x_t, 	
-				# 		prev_wa 	= prev_wa_t,
-				# 		a_cfg_scale = a_cfg_scale,
-				# 		r_cfg_scale = r_cfg_scale,
-				# 		e_cfg_scale = e_cfg_scale
-				# 		)
 				out = self.forward_with_cfv_onnxruntime(
 						t 			= tt.unsqueeze(0),
 						x 			= zt,
@@ -221,12 +218,7 @@ class FLOAT(BaseModel):
 						r_cfg_scale = r_cfg_scale,
 						e_cfg_scale = e_cfg_scale
 					)
-
 				out_current = out[:, self.num_prev_frames:]
-				# print(tt)
-				# print(out.shape)
-				# print(self.num_prev_frames)
-				# print(out_current.shape)
 				return out_current
 
 			# solve ODE
@@ -291,8 +283,13 @@ class FLOAT(BaseModel):
 		if r_cfg_scale is None: r_cfg_scale = self.opt.r_cfg_scale
 		if e_cfg_scale is None: e_cfg_scale = self.opt.e_cfg_scale
 
+		import time
+		start = time.time()
 		sample = self.sample(data, a_cfg_scale = a_cfg_scale, r_cfg_scale = r_cfg_scale, e_cfg_scale = e_cfg_scale, emo = emo, nfe = nfe, seed = seed)
+		end = time.time()
+		print(f"[#ONNXRUNTIME]> Sampling completed in {end - start:.2f} seconds.")
 		data_out = self.decode_latent_into_image(s_r = s_r, s_r_feats = s_r_feats, r_d = sample)
+		print(f"[#ONNXRUNTIME]> Achieved FPS = {data_out['d_hat'].shape[1] / (end - start):.2f} frames/sec.")
 		return data_out
 
 

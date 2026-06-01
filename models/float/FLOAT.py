@@ -168,8 +168,13 @@ class FLOAT(BaseModel):
 		if r_cfg_scale is None: r_cfg_scale = self.opt.r_cfg_scale
 		if e_cfg_scale is None: e_cfg_scale = self.opt.e_cfg_scale
 
+		import time
+		start = time.time()
 		sample = self.sample(data, a_cfg_scale = a_cfg_scale, r_cfg_scale = r_cfg_scale, e_cfg_scale = e_cfg_scale, emo = emo, nfe = nfe, seed = seed)
+		end = time.time()
+		print(f"[#FLOAT]> Sampling completed in {end - start:.2f} seconds.")
 		data_out = self.decode_latent_into_image(s_r = s_r, s_r_feats = s_r_feats, r_d = sample)
+		print(f"[#FLOAT]> Achieved FPS = {data_out['d_hat'].shape[1] / (end - start):.2f} frames/sec.")
 		return data_out
 
 

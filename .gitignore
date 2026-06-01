@@ -28,3 +28,5 @@ accelerate_dev/float_fmt.onnx
 onnx_models/float_fmt.onnx
 onnx_models/fmt_onnx_noconsfold.onnx
 onnx_models/fmt_onnx.onnx
+onnx_models/fmt_onnx_bool.onnx
+onnx_models/fmt_onnx_maskfill.onnx

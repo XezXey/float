@@ -111,7 +111,10 @@ class InferenceAgent:
 			vid = vid.detach().clamp(-1, 1).cpu()
 			vid = ((vid + 1) / 2 * 255).type('torch.ByteTensor')
 			torchvision.io.write_video(temp_filename, vid, fps=self.opt.fps)			
+			print(audio_path, video_path)
 			if audio_path is not None:
+				print("FOUND AUDIO")
+				
 				with open(os.devnull, 'wb') as f:
 					command =  "ffmpeg -i {} -i {} -c:v copy -c:a aac {} -y".format(temp_filename, audio_path, video_path)
 					subprocess.call(command, shell=True, stdout=f, stderr=f)

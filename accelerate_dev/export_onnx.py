@@ -17,11 +17,7 @@ import torch
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
-tensorrt_dir = os.path.join(ROOT, "tensorrt")
-if tensorrt_dir not in sys.path:
-    sys.path.insert(0, tensorrt_dir)
 
-import _fmt_utils
 from _fmt_utils import load_fmt_wrapper, build_dummy_inputs, add_model_args
 
 

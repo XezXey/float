@@ -13,8 +13,7 @@ def enc_dec_mask(T, S, frame_width = 1, expansion = 2):
 	mask = torch.ones(T, S)
 	for i in range(T):
 		mask[i, max(0, (i - expansion) * frame_width):(i + expansion + 1) * frame_width] = 0
-	# return mask == 1
-	return (mask == 1).float()
+	return mask == 1
 
 
 def get_sinusoid_encoding_table(n_position, d_hid, padding_idx=None):
@@ -72,8 +71,7 @@ class Attention(nn.Module):
 		if self.fused_attn:
 			x = F.scaled_dot_product_attention(
 				q, k, v,
-				# attn_mask = ~mask,
-				attn_mask = 1 - mask,
+				attn_mask = ~mask,
 				dropout_p=self.attn_drop.p if self.training else 0.,
 			)
 		else:
@@ -313,13 +311,6 @@ class FlowMatchingTransformer(BaseModel):
 		for block in self.blocks:
 			x = block(x, c, self.alignment_mask)  # (N, T, D)
 		return self.decoder(x, c)
-		
- 
-	@torch.no_grad()
-	def forward_with_cfv_trt(self,):
-		pass
-		
-    
 
 	@torch.no_grad()
 	def forward_with_cfv(self, t, x, wa, wr, we, prev_x, prev_wa, a_cfg_scale=2.0, r_cfg_scale=1.0, e_cfg_scale=1.0, **kwargs) -> torch.Tensor:

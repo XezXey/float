@@ -1,5 +1,5 @@
 """
-	Inference Stage 2
+	Inference Stage 2 - Flexible (PyTorch / TensorRT / Decoder-only TRT)
 """
 
 import os, torch, random, cv2, torchvision, subprocess, librosa, datetime, tempfile, face_alignment
@@ -93,8 +93,9 @@ class InferenceAgent:
 		self.data_processor = DataProcessor(opt)
 
 	def load_model(self) -> None:
+		trt_model_path = getattr(self.opt, 'trt_model_path', None)
 		trt_decoder_path = getattr(self.opt, 'trt_decoder_path', None)
-		self.G = FLOAT(self.opt, trt_model_path=self.opt.trt_model_path, trt_decoder_path=trt_decoder_path)
+		self.G = FLOAT(self.opt, trt_model_path=trt_model_path, trt_decoder_path=trt_decoder_path)
 
 	def load_weight(self, checkpoint_path: str, rank: int) -> None:
 		state_dict = torch.load(checkpoint_path, map_location='cpu', weights_only=True)
@@ -109,8 +110,6 @@ class InferenceAgent:
 		del state_dict
   
 	def save_video(self, vid_target_recon: torch.Tensor, video_path: str, audio_path: str) -> str:
-		# if os.path.dirname(video_path):
-		# 	os.makedirs(os.path.dirname(video_path), exist_ok=True)
 		os.makedirs(video_path, exist_ok=True)
 		with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as temp_video:
 			temp_filename = temp_video.name
@@ -150,9 +149,17 @@ class InferenceAgent:
 		data = self.data_processor.preprocess(ref_path, audio_path, no_crop = no_crop)
 		if verbose: print(f"> [Done] Preprocess.")
 
+		# Determine labeling for printouts
+		run_mode = "PyTorch"
+		if getattr(self.G, 'trt_inferencer', None) is not None and getattr(self.G, 'trt_dec_inferencer', None) is not None:
+			run_mode = "TENSORRT"
+		elif getattr(self.G, 'trt_inferencer', None) is not None:
+			run_mode = "TENSORRT_FMT_ONLY"
+		elif getattr(self.G, 'trt_dec_inferencer', None) is not None:
+			run_mode = "TENSORRT_DECODER_ONLY"
+
 		# inference
 		start_inf = time.time()
-		# inference = Whole FLOAT (audio encoder + image encoder + motion autoencoder + FMT sampling + decoder)
 		d_hat = self.G.inference(
 			data 		= data,
 			a_cfg_scale = a_cfg_scale,
@@ -161,17 +168,17 @@ class InferenceAgent:
 			emo 		= emo,
 			nfe			= nfe,
 			seed		= seed
-			)['d_hat']
+		)['d_hat']
 		end_inf = time.time()
-		print(f"> [#TENSORRT] Inference completed () in {end_inf - start_inf:.2f} seconds.")
-		print(f"> [#TENSORRT] Inference FPS = {d_hat.shape[0] / (end_inf - start_inf):.2f} frames/sec.")
+		print(f"> [#{run_mode}] Inference completed () in {end_inf - start_inf:.2f} seconds.")
+		print(f"> [#{run_mode}] Inference FPS = {d_hat.shape[0] / (end_inf - start_inf):.2f} frames/sec.")
 
 		start_save = time.time()
 		res_video_path = self.save_video(d_hat, res_video_path, audio_path)
 		end_save = time.time()
-		print(f"> [#TENSORRT] Video saving completed in {end_save - start_save:.2f} seconds.")
+		print(f"> [#{run_mode}] Video saving completed in {end_save - start_save:.2f} seconds.")
 		print(f"> [Done] result saved at {res_video_path}")
-		return res_video_path, {'n_frames': d_hat.shape[0]}
+		return res_video_path, {'n_frames': d_hat.shape[0], 'mode': run_mode}
 
 
 class InferenceOptions(BaseOptions):
@@ -181,9 +188,9 @@ class InferenceOptions(BaseOptions):
 	def initialize(self, parser):
 		super().initialize(parser)
 		parser.add_argument("--trt_model_path",
-				required=True, type=str, help="Path to the TensorRT model file exported by export_trt.py")
+				default=None, type=str, help="Path to the TensorRT model file for FMT (optional)")
 		parser.add_argument("--trt_decoder_path",
-				default=None, type=str, help="Path to the TensorRT decoder engine file")
+				default=None, type=str, help="Path to the TensorRT decoder engine file (optional)")
 		parser.add_argument("--ref_path",
 				default=None, type=str,help='ref')
 		parser.add_argument('--aud_path',
@@ -240,7 +247,9 @@ if __name__ == '__main__':
 			seed 		= opt.seed
 			)
 		end = time.time()
-		print(f"> [#TENSORRT] Total execution (Preprocess + TENSORRT + Save) time: {end - start:.2f} seconds.")
-		print(f"> [#TENSORRT] Total execution FPS = {misc['n_frames'] / (end - start):.2f} frames/sec.")
+		run_mode = misc.get('mode', 'UNKNOWN')
+		print(f"> [#{run_mode}] Total execution (Preprocess + {run_mode} + Save) time: {end - start:.2f} seconds.")
+		print(f"> [#{run_mode}] Total execution FPS = {misc['n_frames'] / (end - start):.2f} frames/sec.")
 	finally:
-		agent.G.context.pop()  # Clean up CUDA context after all done
+		if getattr(agent.G, 'context', None) is not None:
+			agent.G.context.pop()  # Clean up CUDA context after all done

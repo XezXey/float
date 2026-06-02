@@ -49,6 +49,7 @@ class FLOAT(BaseModel):
 			'rtol': self.opt.ode_rtol,
 			'method': self.opt.torchdiffeq_ode_method
 		}
+		self.context = None
   
 		# ONNX Runtime session for forward_with_cfv
 		if trt_model_path is None:
@@ -73,7 +74,7 @@ class FLOAT(BaseModel):
 			self.onnx_model_path = onnx_model_path
 			cuda.init()
 			self.context = cuda.Device(0).make_context()
-			self.trt_inferencer = TRTInferencer(self.opt.trt_model_path)
+			self.trt_inferencer = TRTInferencer(self.onnx_model_path)
 			self.trt_stream = torch.cuda.Stream()
 			self.warmup_trt_engine()
 
@@ -234,18 +235,32 @@ class FLOAT(BaseModel):
 				wa_t = F.pad(wa_t, (0, 0, 0, self.num_frames_for_clip - wa_t.shape[1]), mode='replicate')
 
 			def sample_chunk(tt, zt):
-				out = self.forward_with_cfv_tensorrt(
-						t 			= tt.unsqueeze(0),
-						x 			= zt,
-						wa 			= wa_t, 			 
-						wr 			= r_s,
-						we 			= we, 
-						prev_x 		= prev_x_t, 	
-						prev_wa 	= prev_wa_t,
-						a_cfg_scale = a_cfg_scale,
-						r_cfg_scale = r_cfg_scale,
-						e_cfg_scale = e_cfg_scale,
-					)
+				if getattr(self, 'trt_inferencer', None) is not None:
+					out = self.forward_with_cfv_tensorrt(
+							t 			= tt.unsqueeze(0),
+							x 			= zt,
+							wa 			= wa_t, 			 
+							wr 			= r_s,
+							we 			= we, 
+							prev_x 		= prev_x_t, 	
+							prev_wa 	= prev_wa_t,
+							a_cfg_scale = a_cfg_scale,
+							r_cfg_scale = r_cfg_scale,
+							e_cfg_scale = e_cfg_scale,
+						)
+				else:
+					out = self.fmt.forward_with_cfv(
+							t 			= tt.unsqueeze(0),
+							x 			= zt,
+							wa 			= wa_t, 			 
+							wr 			= r_s,
+							we 			= we, 
+							prev_x 		= prev_x_t, 	
+							prev_wa 	= prev_wa_t,
+							a_cfg_scale = a_cfg_scale,
+							r_cfg_scale = r_cfg_scale,
+							e_cfg_scale = e_cfg_scale,
+						)
 				out_current = out[:, self.num_prev_frames:]
 				return out_current
 

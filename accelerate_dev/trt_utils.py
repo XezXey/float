@@ -243,34 +243,87 @@ if __name__ == '__main__':
         "e_cfg_scale": np.array([1.0],               dtype=np.float32),
     }
 
+    import tqdm
     import time
+
+    # Pre-allocate buffers once for the benchmark to avoid allocation overhead in the loop
+    bindings = {}
     
-    # --- Run warmup --- #
-    print("Running warmup inference...")
-    all_warmup = []
-    for _ in range(50):
-        start_time = time.time()
-        _ = inferencer.infer(batch_size=B, **inputs)
-        end_time = time.time()
-        all_warmup.append(end_time - start_time)
-    print(f"[#TENSORRT] Warmup completed in {np.sum(all_warmup) * 1000:.3f} ms (avg {np.mean(all_warmup) * 1000:.2f} +- {np.std(all_warmup) * 1000:.2f} ms per run)")
+    # 1. Allocate and copy inputs
+    for name, data in inputs.items():
+        arr = np.ascontiguousarray(data, dtype=np.float32)
+        size = int(np.prod(data.shape))
+        host_mem = cuda.pagelocked_empty(size, np.float32)
+        device_mem = cuda.mem_alloc(host_mem.nbytes)
+        np.copyto(host_mem, arr.ravel())
+        cuda.memcpy_htod(device_mem, host_mem)
+        
+        inferencer.context.set_input_shape(name, data.shape)
+        inferencer.context.set_tensor_address(name, int(device_mem))
+        bindings[name] = {"host": host_mem, "device": device_mem}
+        
+    # 2. Allocate outputs
+    output_names = []
+    for i in range(inferencer.engine.num_io_tensors):
+        name = inferencer.engine.get_tensor_name(i)
+        if inferencer.engine.get_tensor_mode(name) == trt.TensorIOMode.OUTPUT:
+            shape = tuple(inferencer.context.get_tensor_shape(name))
+            dtype = trt.nptype(inferencer.engine.get_tensor_dtype(name))
+            size = int(np.prod(shape))
+            host_mem = cuda.pagelocked_empty(size, dtype)
+            device_mem = cuda.mem_alloc(host_mem.nbytes)
             
-    
-    # --- Run inference ---
-    print("Running timed inference...")
-    all = []
+            inferencer.context.set_tensor_address(name, int(device_mem))
+            bindings[name] = {"host": host_mem, "device": device_mem, "shape": shape}
+            output_names.append(name)
+
+    # --- Run warmup --- #
+    print("Running warmup inference (pre-allocated)...")
+    for _ in range(50):
+        inferencer.context.execute_async_v3(stream_handle=inferencer.stream.handle)
+    inferencer.stream.synchronize()
+            
+    # --- Run timed inference (GPU execution only) ---
+    print("Running timed inference (pre-allocated, GPU execution only)...")
+    all_gpu = []
     ss = time.time()
     for _ in tqdm.tqdm(range(1000)):
         start_time = time.time()
-        outputs = inferencer.infer(batch_size=B, **inputs)
+        inferencer.context.execute_async_v3(stream_handle=inferencer.stream.handle)
+        inferencer.stream.synchronize()
         end_time = time.time()
-        all.append(end_time - start_time)
+        all_gpu.append(end_time - start_time)
     se = time.time()
-    print(f"Total time: {(se - ss)*1000:.3f} ms")
-    print(f"Average time: {np.mean(all) * 1000:.3f} ms ± {np.std(all) * 1000:.3f} ms")
+    
+    print(f"Total time (GPU execution only): {(se - ss)*1000:.3f} ms")
+    print(f"Average time (GPU execution only): {np.mean(all_gpu) * 1000:.3f} ms ± {np.std(all_gpu) * 1000:.3f} ms")
+    
+    # --- Run timed inference (including Host-to-Device and Device-to-Host copies) ---
+    print("Running timed inference (including H2D + D2H copies)...")
+    all_copies = []
+    ss = time.time()
+    for _ in tqdm.tqdm(range(1000)):
+        start_time = time.time()
+        # H2D copies
+        for name, data in inputs.items():
+            cuda.memcpy_htod_async(bindings[name]["device"], bindings[name]["host"], inferencer.stream)
+        # Run
+        inferencer.context.execute_async_v3(stream_handle=inferencer.stream.handle)
+        # D2H copies
+        for name in output_names:
+            cuda.memcpy_dtoh_async(bindings[name]["host"], bindings[name]["device"], inferencer.stream)
+        # Sync
+        inferencer.stream.synchronize()
+        end_time = time.time()
+        all_copies.append(end_time - start_time)
+    se = time.time()
+    
+    print(f"Total time (with H2D/D2H copies): {(se - ss)*1000:.3f} ms")
+    print(f"Average time (with H2D/D2H copies): {np.mean(all_copies) * 1000:.3f} ms ± {np.std(all_copies) * 1000:.3f} ms")
 
-    # --- Use results ---
-    for name, tensor in outputs.items():
-        print(f"Output '{name}': shape={tensor.shape}, dtype={tensor.dtype}")
+    # Clean up device allocations
+    for name, buf in bindings.items():
+        buf["device"].free()
+
     context.pop()
     

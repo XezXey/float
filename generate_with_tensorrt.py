@@ -169,7 +169,7 @@ class InferenceAgent:
 		print(f"> [#TENSORRT] Video saving completed in {end_save - start_save:.2f} seconds.")
   
 		if verbose: print(f"> [Done] result saved at {res_video_path}")
-		return res_video_path
+		return res_video_path, {'n_frames': d_hat.shape[0]}
 
 
 class InferenceOptions(BaseOptions):
@@ -223,7 +223,7 @@ if __name__ == '__main__':
 		seed_everything(opt.seed)
 	try:
 		start = time.time()
-		agent.run_inference(
+		_, misc = agent.run_inference(
 			res_video_path,
 			ref_path,
 			aud_path,
@@ -237,5 +237,6 @@ if __name__ == '__main__':
 			)
 		end = time.time()
 		print(f"> [#TENSORRT] Total execution (Preprocess + TENSORRT + Save) time: {end - start:.2f} seconds.")
+		print(f"> [#TENSORRT] Total execution FPS = {misc['n_frames'] / (end - start):.2f} frames/sec.")
 	finally:
 		agent.G.context.pop()  # Clean up CUDA context after all done

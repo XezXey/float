@@ -64,6 +64,7 @@ class FLOAT(BaseModel):
 			cuda.init()
 			self.context = cuda.Device(0).make_context()
 			self.trt_inferencer = TRTInferencer(self.opt.trt_model_path)
+			self.trt_stream = torch.cuda.Stream()
 			self.warmup_trt_engine()
   
 	@torch.no_grad()
@@ -206,21 +207,62 @@ class FLOAT(BaseModel):
 		r_cfg_scale,
 		e_cfg_scale,
 	):
-		B = 1
-		inputs = {
-            "t": t.cpu().numpy().astype(np.float32),
-			"x": x.cpu().numpy().astype(np.float32),
-			"wa": wa.cpu().numpy().astype(np.float32),
-			"wr": wr.cpu().numpy().astype(np.float32),
-			"we": we.cpu().numpy().astype(np.float32),
-			"prev_x": prev_x.cpu().numpy().astype(np.float32),
-			"prev_wa": prev_wa.cpu().numpy().astype(np.float32),
-			"a_cfg_scale": np.array([a_cfg_scale], dtype=np.float32),
-			"e_cfg_scale": np.array([e_cfg_scale], dtype=np.float32)
-		}
-		outputs = self.trt_inferencer.infer(batch_size=B, **inputs)
-		output_numpy = outputs["output"]  # Adjust this key based on your actual output name
-		return torch.from_numpy(output_numpy).to(device=x.device)
+		# Wrap scalars as CUDA tensors if necessary
+		if not isinstance(a_cfg_scale, torch.Tensor):
+			a_cfg_scale = torch.tensor([a_cfg_scale], dtype=torch.float32, device=x.device)
+		if not isinstance(e_cfg_scale, torch.Tensor):
+			e_cfg_scale = torch.tensor([e_cfg_scale], dtype=torch.float32, device=x.device)
+
+		# Ensure inputs are contiguous float32 GPU tensors
+		t_gpu = t.to(device=x.device, dtype=torch.float32).contiguous()
+		x_gpu = x.to(device=x.device, dtype=torch.float32).contiguous()
+		wa_gpu = wa.to(device=x.device, dtype=torch.float32).contiguous()
+		wr_gpu = wr.to(device=x.device, dtype=torch.float32).contiguous()
+		we_gpu = we.to(device=x.device, dtype=torch.float32).contiguous()
+		prev_x_gpu = prev_x.to(device=x.device, dtype=torch.float32).contiguous()
+		prev_wa_gpu = prev_wa.to(device=x.device, dtype=torch.float32).contiguous()
+		a_cfg_gpu = a_cfg_scale.to(device=x.device, dtype=torch.float32).contiguous()
+		e_cfg_gpu = e_cfg_scale.to(device=x.device, dtype=torch.float32).contiguous()
+
+		# Determine the output shape
+		B = x.shape[0]
+		out_len = prev_x.shape[1] + x.shape[1]
+		dim_w = x.shape[2]
+		out_shape = (B, out_len, dim_w)
+
+		# Pre-allocate output directly on GPU
+		output_tensor = torch.empty(out_shape, dtype=torch.float32, device=x.device)
+
+		# Bind input dimensions
+		self.trt_inferencer.context.set_input_shape("t", t_gpu.shape)
+		self.trt_inferencer.context.set_input_shape("x", x_gpu.shape)
+		self.trt_inferencer.context.set_input_shape("wa", wa_gpu.shape)
+		self.trt_inferencer.context.set_input_shape("wr", wr_gpu.shape)
+		self.trt_inferencer.context.set_input_shape("we", we_gpu.shape)
+		self.trt_inferencer.context.set_input_shape("prev_x", prev_x_gpu.shape)
+		self.trt_inferencer.context.set_input_shape("prev_wa", prev_wa_gpu.shape)
+		self.trt_inferencer.context.set_input_shape("a_cfg_scale", a_cfg_gpu.shape)
+		self.trt_inferencer.context.set_input_shape("e_cfg_scale", e_cfg_gpu.shape)
+
+		# Bind raw memory addresses
+		self.trt_inferencer.context.set_tensor_address("t", t_gpu.data_ptr())
+		self.trt_inferencer.context.set_tensor_address("x", x_gpu.data_ptr())
+		self.trt_inferencer.context.set_tensor_address("wa", wa_gpu.data_ptr())
+		self.trt_inferencer.context.set_tensor_address("wr", wr_gpu.data_ptr())
+		self.trt_inferencer.context.set_tensor_address("we", we_gpu.data_ptr())
+		self.trt_inferencer.context.set_tensor_address("prev_x", prev_x_gpu.data_ptr())
+		self.trt_inferencer.context.set_tensor_address("prev_wa", prev_wa_gpu.data_ptr())
+		self.trt_inferencer.context.set_tensor_address("a_cfg_scale", a_cfg_gpu.data_ptr())
+		self.trt_inferencer.context.set_tensor_address("e_cfg_scale", e_cfg_gpu.data_ptr())
+		self.trt_inferencer.context.set_tensor_address("output", output_tensor.data_ptr())
+
+		# Enqueue execution asynchronously on a dedicated, non-default stream to avoid performance and synchronization issues
+		current_stream = torch.cuda.current_stream()
+		self.trt_stream.wait_stream(current_stream)  # Wait for PyTorch inputs to be ready
+		self.trt_inferencer.context.execute_async_v3(stream_handle=self.trt_stream.cuda_stream)
+		current_stream.wait_stream(self.trt_stream)  # Wait for TensorRT outputs to be ready before PyTorch consumes them
+
+		return output_tensor
 
 	@torch.no_grad()
 	def forward_with_cfv_onnxruntime(

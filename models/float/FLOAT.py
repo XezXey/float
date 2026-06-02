@@ -123,42 +123,42 @@ class FLOAT(BaseModel):
 				wa_t = F.pad(wa_t, (0, 0, 0, self.num_frames_for_clip - wa_t.shape[1]), mode='replicate')
 
 			def sample_chunk(tt, zt):
-				all = []
-
-				import tqdm
-				import time
-				for _ in tqdm.tqdm(range(1000)):
-					ss = time.time()
-					out = self.fmt.forward_with_cfv(
-							t 			= tt.unsqueeze(0),
-							x 			= zt,
-							wa 			= wa_t, 			 
-							wr 			= r_s,
-							we 			= we, 
-							prev_x 		= prev_x_t, 	
-							prev_wa 	= prev_wa_t,
-							a_cfg_scale = a_cfg_scale,
-							r_cfg_scale = r_cfg_scale,
-							e_cfg_scale = e_cfg_scale
-							)
-					torch.cuda.synchronize()  # Force CPU to wait for GPU to finish the forward pass
-					ee = time.time()
-					all.append(ee - ss)
-				print(f"Average time: {np.mean(all) * 1000:.3f} ms ± {np.std(all) * 1000:.3f} ms")
-				exit()
-     
-				# out = self.fmt.forward_with_cfv(
-				# 		t 			= tt.unsqueeze(0),
-				# 		x 			= zt,
-				# 		wa 			= wa_t, 			 
-				# 		wr 			= r_s,
-				# 		we 			= we, 
-				# 		prev_x 		= prev_x_t, 	
-				# 		prev_wa 	= prev_wa_t,
-				# 		a_cfg_scale = a_cfg_scale,
-				# 		r_cfg_scale = r_cfg_scale,
-				# 		e_cfg_scale = e_cfg_scale
-				# 		)
+				# all_times = []
+				# import tqdm
+				# import time
+				# print("\nRunning PyTorch timed inference (1000 iterations)...")
+				# for _ in tqdm.tqdm(range(1000)):
+				# 	ss = time.time()
+				# 	out = self.fmt.forward_with_cfv(
+				# 			t 			= tt.unsqueeze(0),
+				# 			x 			= zt,
+				# 			wa 			= wa_t, 			 
+				# 			wr 			= r_s,
+				# 			we 			= we, 
+				# 			prev_x 		= prev_x_t, 	
+				# 			prev_wa 	= prev_wa_t,
+				# 			a_cfg_scale = a_cfg_scale,
+				# 			r_cfg_scale = r_cfg_scale,
+				# 			e_cfg_scale = e_cfg_scale
+				# 			)
+				# 	torch.cuda.synchronize()
+				# 	ee = time.time()
+				# 	all_times.append(ee - ss)
+				# print(f"Average time: {np.mean(all_times) * 1000:.3f} ms ± {np.std(all_times) * 1000:.3f} ms")
+				# exit()
+    
+				out = self.fmt.forward_with_cfv(
+						t 			= tt.unsqueeze(0),
+						x 			= zt,
+						wa 			= wa_t, 			 
+						wr 			= r_s,
+						we 			= we, 
+						prev_x 		= prev_x_t, 	
+						prev_wa 	= prev_wa_t,
+						a_cfg_scale = a_cfg_scale,
+						r_cfg_scale = r_cfg_scale,
+						e_cfg_scale = e_cfg_scale
+						)
 
 				out_current = out[:, self.num_prev_frames:]
 				return out_current

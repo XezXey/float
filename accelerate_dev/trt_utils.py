@@ -152,6 +152,31 @@ class TRTInferencer:
             if isinstance(layer, dict):
                 name = layer.get("Name", "unknown")
                 precision = layer.get("LayerPrecision", layer.get("Precision", "unknown"))
+                if precision == "unknown":
+                    tensors = layer.get("Outputs", [])
+                    if not tensors:
+                        tensors = layer.get("Inputs", [])
+                    dtypes = []
+                    for t in tensors:
+                        dt = t.get("Format/Datatype")
+                        if dt and dt != "N/A due to dynamic shapes":
+                            dtypes.append(dt)
+                    if not dtypes:
+                        for t in tensors:
+                            dt = t.get("Format/Datatype")
+                            if dt:
+                                dtypes.append(dt)
+                    if dtypes:
+                        dtype_map = {
+                            "Half": "FP16",
+                            "Float": "FP32",
+                            "Int8": "INT8",
+                            "Int32": "INT32",
+                            "Int64": "INT64",
+                            "N/A due to dynamic shapes": "Unknown (Dynamic)"
+                        }
+                        mapped_dtypes = sorted(list(set(dtype_map.get(d, d) for d in dtypes)))
+                        precision = "/".join(mapped_dtypes)
             
             # Check if the layer entry is a string (Your current edge-case)
             elif isinstance(layer, str):

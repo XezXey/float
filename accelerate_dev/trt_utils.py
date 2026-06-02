@@ -112,12 +112,94 @@ class TRTInferencer:
         except cuda.LogicError as e:
             print(f"[CUDA] Pop warning: {e}")
     
+    def check_engine_precision(self):
+        """Check and summarize precision of loaded TRT engine."""
+        if self.engine is None:
+            print("No engine loaded.")
+            return
+
+        print("\n========== ENGINE PRECISION INFO ==========")
+
+        # --- I/O Tensor Info ---
+        print("\n[I/O Tensors]")
+        io_dtypes = set()
+        for i in range(self.engine.num_io_tensors):
+            name  = self.engine.get_tensor_name(i)
+            dtype = self.engine.get_tensor_dtype(name)
+            shape = self.engine.get_tensor_shape(name)
+            mode  = self.engine.get_tensor_mode(name)
+            io_dtypes.add(dtype)
+            print(f"  {str(mode):<30} {name:<30} dtype={dtype}  shape={shape}")
+
+        # --- Layer Info ---
+        print("\n[Layers]")
+        inspector = self.engine.create_engine_inspector()
+        import json
+        engine_json = json.loads(
+            inspector.get_engine_information(trt.LayerInformationFormat.JSON)
+        )
+        raw = inspector.get_engine_information(trt.LayerInformationFormat.JSON)
+        layer_precisions = {}
+        layers_list = engine_json.get("Layers", [])
+        # for layer in layers_list:
+        #     name      = layer.get("Name", "unknown")
+        #     precision = layer.get("LayerPrecision", "unknown")
+        #     layer_precisions[precision] = layer_precisions.get(precision, 0) + 1
+        #     print(f"  {name:<50} precision={precision}")
+        import re
+        for layer in layers_list:
+            # Check if the layer entry is a dictionary (Standard TRT behavior)
+            if isinstance(layer, dict):
+                name = layer.get("Name", "unknown")
+                precision = layer.get("LayerPrecision", layer.get("Precision", "unknown"))
+            
+            # Check if the layer entry is a string (Your current edge-case)
+            elif isinstance(layer, str):
+                name = layer.strip()
+                
+                # Try to extract precision if it's written in the string (e.g., "Factoring...", "FP16", "INT8")
+                # TensorRT often logs precision in uppercase within these reformatted strings
+                precision_match = re.search(r'\b(FP32|FP16|INT8|TF32|Float|Half|Int8)\b', name, re.IGNORECASE)
+                precision = precision_match.group(0).upper() if precision_match else "Unknown/Mixed"
+                
+                # Shorten the name a bit for clean printing if it's too long
+                if len(name) > 67:
+                    name = name[:64] + "..."
+            else:
+                continue
+            # Print individual layer info
+            print(f"{name:<70} | {precision:<10}")
+            
+            # Track the counts
+            layer_precisions[precision] = layer_precisions.get(precision, 0) + 1
+
+        # --- Summary ---
+        print("\n[Summary]")
+        dtype_map = {
+            trt.DataType.FLOAT : "FP32",
+            trt.DataType.HALF  : "FP16",
+            trt.DataType.INT8  : "INT8",
+            trt.DataType.BF16  : "BF16",
+            trt.DataType.FP8   : "FP8",
+        }
+        print(f"  I/O tensor dtypes : {[dtype_map.get(d, str(d)) for d in io_dtypes]}")
+        print(f"  Layer precision counts:")
+        for precision, count in sorted(layer_precisions.items()):
+            print(f"    {precision:<10}: {count} layers")
+
+        print("===========================================\n")
+    
 if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser(description="Test TRTInferencer with a sample engine and inputs")
+    parser.add_argument("--engine_path", type=str, default="accelerate_dev/float_fmt.engine", help="Path to the TensorRT engine file")
+    args = parser.parse_args()
     
     cuda.init()
     context = cuda.Device(0).make_context() 
     # --- Init (once) ---
-    inferencer = TRTInferencer("./trt_models/fmt_onnx_maskfill_addcfg.trt")
+    inferencer = TRTInferencer(args.engine_path)
+    inferencer.check_engine_precision()
 
     # --- Prepare inputs (example with batch_size=1) ---
     B = 1

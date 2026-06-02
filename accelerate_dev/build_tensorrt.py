@@ -14,6 +14,12 @@ parser.add_argument(
     default="accelerate_dev/float_fmt.engine",
     help="Path to save the compiled TensorRT engine file",
 )
+parser.add_argument(
+    "--fp16",
+    action="store_true",
+    help="Enable FP16 precision (if supported by the hardware)",
+)
+
 args = parser.parse_args()
 
 TRT_LOGGER = trt.Logger(trt.Logger.WARNING)
@@ -33,11 +39,14 @@ def build_engine(onnx_path, engine_path=None, fp16=True,
          trt.OnnxParser(network, TRT_LOGGER) as parser:
 
         config = builder.create_builder_config()
+        config.profiling_verbosity = trt.ProfilingVerbosity.DETAILED
         config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 4 << 30)
 
         if fp16 and builder.platform_has_fast_fp16:
             config.set_flag(trt.BuilderFlag.FP16)
-            print("FP16 enabled")
+            print("[#] FP16 enabled")
+        else:
+            print("[#] Using FP32 by default")
 
         with open(onnx_path, "rb") as f:
             if not parser.parse(f.read()):
@@ -78,4 +87,4 @@ def build_engine(onnx_path, engine_path=None, fp16=True,
         return serialized
 
 inspect_onnx_model(args.onnx_path)
-serialized_engine = build_engine(args.onnx_path, args.engine_path)
+serialized_engine = build_engine(args.onnx_path, args.engine_path, fp16=args.fp16)

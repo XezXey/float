@@ -25,7 +25,7 @@ import pycuda.driver as cuda
 
 ######## Main Phase 2 model ########		
 class FLOAT(BaseModel):
-	def __init__(self, opt, trt_model_path: str = None):
+	def __init__(self, opt, trt_model_path: str = None, trt_decoder_path: str = None):
 		super().__init__()
 		self.opt = opt
 
@@ -58,6 +58,16 @@ class FLOAT(BaseModel):
 			print(f"[#] Initializing TensorRT session with model: {trt_model_path}")
 			self.init_trt_engine(trt_model_path)
 			print("#"*100)
+
+		# TensorRT Decoder setup
+		if trt_decoder_path is None:
+			print("[#] No TensorRT decoder path provided. Using PyTorch decoder implementation.")
+			self.trt_dec_inferencer = None
+		else:
+			print("#"*100)
+			print(f"[#] Initializing TensorRT Decoder session with model: {trt_decoder_path}")
+			self.init_trt_decoder(trt_decoder_path)
+			print("#"*100)
    
 	def init_trt_engine(self, onnx_model_path: str):
 			self.onnx_model_path = onnx_model_path
@@ -66,6 +76,56 @@ class FLOAT(BaseModel):
 			self.trt_inferencer = TRTInferencer(self.opt.trt_model_path)
 			self.trt_stream = torch.cuda.Stream()
 			self.warmup_trt_engine()
+
+	def init_trt_decoder(self, trt_decoder_path: str):
+			self.trt_decoder_path = trt_decoder_path
+			try:
+				cuda.init()
+			except Exception:
+				pass
+			if not hasattr(self, 'context') or self.context is None:
+				self.context = cuda.Device(0).make_context()
+			self.trt_dec_inferencer = TRTInferencer(self.trt_decoder_path)
+			self.trt_dec_stream = torch.cuda.Stream()
+			self.warmup_trt_decoder()
+
+	@torch.no_grad()
+	def warmup_trt_decoder(self):
+		print("[#TENSORRT] Warming up TensorRT Decoder engine with dummy inputs...")
+		B = 1
+		wa = torch.randn(B, 512).to(device=self.opt.rank, dtype=torch.float32)
+		feat0 = torch.randn(B, 512, 8, 8).to(device=self.opt.rank, dtype=torch.float32)
+		feat1 = torch.randn(B, 512, 16, 16).to(device=self.opt.rank, dtype=torch.float32)
+		feat2 = torch.randn(B, 512, 32, 32).to(device=self.opt.rank, dtype=torch.float32)
+		feat3 = torch.randn(B, 256, 64, 64).to(device=self.opt.rank, dtype=torch.float32)
+		feat4 = torch.randn(B, 128, 128, 128).to(device=self.opt.rank, dtype=torch.float32)
+		feat5 = torch.randn(B, 64, 256, 256).to(device=self.opt.rank, dtype=torch.float32)
+		feat6 = torch.randn(B, 32, 512, 512).to(device=self.opt.rank, dtype=torch.float32)
+		feats = [feat0, feat1, feat2, feat3, feat4, feat5, feat6]
+		for _ in range(10):
+			_ = self.forward_decoder_tensorrt(wa, feats)
+		print("[#TENSORRT] Decoder warmup completed.")
+
+	@torch.no_grad()
+	def forward_decoder_tensorrt(self, wa, feats):
+		wa_gpu = wa.to(device=self.opt.rank, dtype=torch.float32).contiguous()
+		feats_gpu = [feat.to(device=self.opt.rank, dtype=torch.float32).contiguous() for feat in feats]
+		output_tensor = torch.empty((1, 3, 512, 512), dtype=torch.float32, device=self.opt.rank)
+		
+		self.trt_dec_inferencer.context.set_input_shape("wa", wa_gpu.shape)
+		for i, feat_gpu in enumerate(feats_gpu):
+			self.trt_dec_inferencer.context.set_input_shape(f"feat{i}", feat_gpu.shape)
+			
+		self.trt_dec_inferencer.context.set_tensor_address("wa", wa_gpu.data_ptr())
+		for i, feat_gpu in enumerate(feats_gpu):
+			self.trt_dec_inferencer.context.set_tensor_address(f"feat{i}", feat_gpu.data_ptr())
+		self.trt_dec_inferencer.context.set_tensor_address("output", output_tensor.data_ptr())
+		
+		current_stream = torch.cuda.current_stream()
+		self.trt_dec_stream.wait_stream(current_stream)
+		self.trt_dec_inferencer.context.execute_async_v3(stream_handle=self.trt_dec_stream.cuda_stream)
+		current_stream.wait_stream(self.trt_dec_stream)
+		return output_tensor
   
 	@torch.no_grad()
 	def warmup_trt_engine(self):
@@ -110,7 +170,10 @@ class FLOAT(BaseModel):
 		d_hat = []
 		for t in range(T):
 			s_r_d_t = s_r + r_d[:, t]
-			img_t, _ = self.motion_autoencoder.dec(s_r_d_t, alpha = None, feats = s_r_feats)
+			if getattr(self, 'trt_dec_inferencer', None) is not None:
+				img_t = self.forward_decoder_tensorrt(s_r_d_t, s_r_feats)
+			else:
+				img_t, _ = self.motion_autoencoder.dec(s_r_d_t, alpha = None, feats = s_r_feats)
 			d_hat.append(img_t)
 		d_hat = torch.stack(d_hat, dim=1).squeeze()
 		return {'d_hat': d_hat}

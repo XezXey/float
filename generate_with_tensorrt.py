@@ -93,7 +93,8 @@ class InferenceAgent:
 		self.data_processor = DataProcessor(opt)
 
 	def load_model(self) -> None:
-		self.G = FLOAT(self.opt, trt_model_path=self.opt.trt_model_path)
+		trt_decoder_path = getattr(self.opt, 'trt_decoder_path', None)
+		self.G = FLOAT(self.opt, trt_model_path=self.opt.trt_model_path, trt_decoder_path=trt_decoder_path)
 
 	def load_weight(self, checkpoint_path: str, rank: int) -> None:
 		state_dict = torch.load(checkpoint_path, map_location='cpu', weights_only=True)
@@ -180,6 +181,8 @@ class InferenceOptions(BaseOptions):
 		super().initialize(parser)
 		parser.add_argument("--trt_model_path",
 				required=True, type=str, help="Path to the TensorRT model file exported by export_trt.py")
+		parser.add_argument("--trt_decoder_path",
+				default=None, type=str, help="Path to the TensorRT decoder engine file")
 		parser.add_argument("--ref_path",
 				default=None, type=str,help='ref')
 		parser.add_argument('--aud_path',

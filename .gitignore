@@ -44,3 +44,4 @@ trt_models/fmt_onnx_maskfill_addcfg_fp16.trt
 trt_models/
 trt_models/fmt_onnx_maskfill_addcfg_tf32.trt
 trt_models/fmt_onnx_maskfill_addcfg_fp8.trt
+onnx_models/float_decoder.onnx

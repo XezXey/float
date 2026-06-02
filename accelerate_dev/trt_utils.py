@@ -1,5 +1,6 @@
 import tensorrt as trt
 import torch
+import tqdm
 import pycuda.driver as cuda
 # import pycuda.autoinit
 # Use this instead of autoinit
@@ -193,7 +194,8 @@ class TRTInferencer:
             else:
                 continue
             # Print individual layer info
-            print(f"{name:<70} | {precision:<10}")
+            if args.verbose:
+                print(f"{name:<70} | {precision:<10}")
             
             # Track the counts
             layer_precisions[precision] = layer_precisions.get(precision, 0) + 1
@@ -218,6 +220,7 @@ if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser(description="Test TRTInferencer with a sample engine and inputs")
     parser.add_argument("--engine_path", type=str, default="accelerate_dev/float_fmt.engine", help="Path to the TensorRT engine file")
+    parser.add_argument("--verbose", action="store_true", help="Print detailed layer info")
     args = parser.parse_args()
     
     cuda.init()
@@ -240,18 +243,31 @@ if __name__ == '__main__':
         "e_cfg_scale": np.array([1.0],               dtype=np.float32),
     }
 
-    n = 100
     import time
+    
+    # --- Run warmup --- #
+    print("Running warmup inference...")
+    all_warmup = []
+    for _ in range(50):
+        start_time = time.time()
+        _ = inferencer.infer(batch_size=B, **inputs)
+        end_time = time.time()
+        all_warmup.append(end_time - start_time)
+    print(f"[#TENSORRT] Warmup completed in {np.sum(all_warmup) * 1000:.3f} ms (avg {np.mean(all_warmup) * 1000:.2f} +- {np.std(all_warmup) * 1000:.2f} ms per run)")
+            
+    
     # --- Run inference ---
+    print("Running timed inference...")
+    all = []
     ss = time.time()
-    for _ in range(n):
+    for _ in tqdm.tqdm(range(1000)):
         start_time = time.time()
         outputs = inferencer.infer(batch_size=B, **inputs)
-        print(outputs["output"].shape)
         end_time = time.time()
-        print(f"Inference time: {(end_time - start_time):.2f} ms")
+        all.append(end_time - start_time)
     se = time.time()
-    print(f"Total time: {(se - ss):.2f} s")
+    print(f"Total time: {(se - ss)*1000:.3f} ms")
+    print(f"Average time: {np.mean(all) * 1000:.3f} ms ± {np.std(all) * 1000:.3f} ms")
 
     # --- Use results ---
     for name, tensor in outputs.items():

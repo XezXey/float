@@ -1,6 +1,7 @@
 import tensorrt as trt
 import argparse
 import onnx
+import os
 parser = argparse.ArgumentParser(description="Build TensorRT engine from ONNX model")
 parser.add_argument(
     "--onnx_path",
@@ -15,9 +16,11 @@ parser.add_argument(
     help="Path to save the compiled TensorRT engine file",
 )
 parser.add_argument(
-    "--fp16",
-    action="store_true",
-    help="Enable FP16 precision (if supported by the hardware)",
+    "--precision",
+    type=str,
+    choices=["fp32", "fp16", "tf32", "fp8"],
+    default="fp32",
+    help="Precision mode: fp32, fp16, tf32, or fp8 (default: fp32)",
 )
 
 args = parser.parse_args()
@@ -31,7 +34,7 @@ def inspect_onnx_model(onnx_path):
                  for d in inp.type.tensor_type.shape.dim]
         print(f"  name: {inp.name}, shape: {shape}, dtype: {inp.type.tensor_type.elem_type}")
 
-def build_engine(onnx_path, engine_path=None, fp16=True,
+def build_engine(onnx_path, engine_path=None, precision="fp32",
                  min_batch=1, opt_batch=1, max_batch=4):
 
     with trt.Builder(TRT_LOGGER) as builder, \
@@ -42,11 +45,25 @@ def build_engine(onnx_path, engine_path=None, fp16=True,
         config.profiling_verbosity = trt.ProfilingVerbosity.DETAILED
         config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 4 << 30)
 
-        if fp16 and builder.platform_has_fast_fp16:
+        # Precision flags config
+        if precision == "fp16":
+            if builder.platform_has_fast_fp16:
+                config.set_flag(trt.BuilderFlag.FP16)
+                print("[#] FP16 precision enabled")
+            else:
+                print("[!] FP16 warning: Platform does not support fast FP16 execution.")
+        elif precision == "tf32":
+            config.set_flag(trt.BuilderFlag.TF32)
+            print("[#] TF32 precision enabled")
+        elif precision == "fp8":
+            config.set_flag(trt.BuilderFlag.FP8)
+            # # Enable FP16 as fallback for layers that don't support FP8
             config.set_flag(trt.BuilderFlag.FP16)
-            print("[#] FP16 enabled")
-        else:
-            print("[#] Using FP32 by default")
+            print("[#] FP8 precision enabled (with FP16 fallback)")
+        else: # fp32
+            # Clear default TF32 if strict FP32 is requested
+            config.clear_flag(trt.BuilderFlag.TF32)
+            print("[#] Strict FP32 precision enabled (TF32 disabled)")
 
         with open(onnx_path, "rb") as f:
             if not parser.parse(f.read()):
@@ -80,11 +97,37 @@ def build_engine(onnx_path, engine_path=None, fp16=True,
             return None
 
         if engine_path:
+            # Check if engine_path is a directory or ends with a slash
+            if os.path.isdir(engine_path) or engine_path.endswith(('/', '\\')):
+                onnx_base = os.path.splitext(os.path.basename(onnx_path))[0]
+                engine_filename = f"{onnx_base}_{precision}.trt"
+                engine_path = os.path.join(engine_path, engine_filename)
+            else:
+                # It is a filename. Check if user already specified '_<precision>' in the base filename
+                dir_name = os.path.dirname(engine_path)
+                file_name = os.path.basename(engine_path)
+                base_name, ext = os.path.splitext(file_name)
+                
+                precision_suffix = f"_{precision}"
+                if precision_suffix.lower() not in base_name.lower():
+                    base_name = f"{base_name}_{precision}"
+                    ext = ".trt"
+                
+                engine_path = os.path.join(dir_name, f"{base_name}{ext}")
+
+            # Ensure parent directories exist
+            parent_dir = os.path.dirname(engine_path)
+            if parent_dir:
+                os.makedirs(parent_dir, exist_ok=True)
+
             with open(engine_path, "wb") as f:
                 f.write(serialized)
             print(f"Saved to {engine_path}")
 
         return serialized
 
+# Parse and override precision with backward compatibility flag
+precision = args.precision
+
 inspect_onnx_model(args.onnx_path)
-serialized_engine = build_engine(args.onnx_path, args.engine_path, fp16=args.fp16)
+serialized_engine = build_engine(args.onnx_path, args.engine_path, precision=precision)

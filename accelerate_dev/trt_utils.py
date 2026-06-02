@@ -1,9 +1,8 @@
 import tensorrt as trt
+import torch
 import pycuda.driver as cuda
 # import pycuda.autoinit
 # Use this instead of autoinit
-cuda.init()
-context = cuda.Device(0).make_context() 
 
 import numpy as np
 
@@ -94,8 +93,29 @@ class TRTInferencer:
                 results[name] = buf["host"].reshape(buf["shape"]).copy()
 
         return results
+
+    def cleanup(self):
+        self.context.pop()  # Clean up CUDA context when done
+        del self.context
+        del self.engine
+        del self.stream
+        
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+            torch.cuda.empty_cache()
+        
+        
+        # 3. Pop PyCUDA context
+        try:
+            self.context.pop()
+            print("[CUDA] Context popped cleanly.")
+        except cuda.LogicError as e:
+            print(f"[CUDA] Pop warning: {e}")
     
 if __name__ == '__main__':
+    
+    cuda.init()
+    context = cuda.Device(0).make_context() 
     # --- Init (once) ---
     inferencer = TRTInferencer("./trt_models/fmt_onnx_maskfill_addcfg.trt")
 
@@ -129,5 +149,5 @@ if __name__ == '__main__':
     # --- Use results ---
     for name, tensor in outputs.items():
         print(f"Output '{name}': shape={tensor.shape}, dtype={tensor.dtype}")
-
-    context.pop()  # Clean up CUDA context when done
+    context.pop()
+    

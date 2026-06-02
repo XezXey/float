@@ -287,7 +287,6 @@ class FLOAT(BaseModel):
 		print(f"[#TENSORRT]> Decoding completed in {dec_end - dec_start:.2f} seconds.")
 		print(f"[#TENSORRT]> Achieved FPS = {data_out['d_hat'].shape[0] / (end - start):.2f} frames/sec.")
 		print(f"[#TENSORRT]> Video's shapes: {data_out['d_hat'].shape}")
-		self.context.pop()  # Clean up CUDA context after inference
 		return data_out
 
 

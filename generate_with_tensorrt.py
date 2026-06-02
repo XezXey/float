@@ -221,18 +221,21 @@ if __name__ == '__main__':
 
 	if opt.seed_everything:
 		seed_everything(opt.seed)
-	start = time.time()
-	agent.run_inference(
-		res_video_path,
-		ref_path,
-		aud_path,
-		a_cfg_scale = opt.a_cfg_scale,
-		r_cfg_scale = opt.r_cfg_scale,
-		e_cfg_scale = opt.e_cfg_scale,
-		emo 		= opt.emo,
-		nfe			= opt.nfe,
-		no_crop 	= opt.no_crop,
-		seed 		= opt.seed
-		)
-	end = time.time()
-	print(f"> [#TENSORRT] Total execution (Preprocess + TENSORRT + Save) time: {end - start:.2f} seconds.")
+	try:
+		start = time.time()
+		agent.run_inference(
+			res_video_path,
+			ref_path,
+			aud_path,
+			a_cfg_scale = opt.a_cfg_scale,
+			r_cfg_scale = opt.r_cfg_scale,
+			e_cfg_scale = opt.e_cfg_scale,
+			emo 		= opt.emo,
+			nfe			= opt.nfe,
+			no_crop 	= opt.no_crop,
+			seed 		= opt.seed
+			)
+		end = time.time()
+		print(f"> [#TENSORRT] Total execution (Preprocess + TENSORRT + Save) time: {end - start:.2f} seconds.")
+	finally:
+		agent.G.context.pop()  # Clean up CUDA context after all done

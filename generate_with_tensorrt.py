@@ -7,13 +7,16 @@ import numpy as np
 import albumentations as A
 import albumentations.pytorch.transforms as A_pytorch
 
+import time
 from tqdm import tqdm
 from pathlib import Path
 from transformers import Wav2Vec2FeatureExtractor
 
-from models.float.FLOAT import FLOAT
+import sys
+sys.path.append('../../')
+from models.utils import seed_everything
+from models.float_with_onnxruntime.FLOAT_TRT import FLOAT
 from options.base_options import BaseOptions
-
 
 class DataProcessor:
 	def __init__(self, opt):
@@ -90,7 +93,7 @@ class InferenceAgent:
 		self.data_processor = DataProcessor(opt)
 
 	def load_model(self) -> None:
-		self.G = FLOAT(self.opt)
+		self.G = FLOAT(self.opt, trt_model_path=self.opt.trt_model_path)
 
 	def load_weight(self, checkpoint_path: str, rank: int) -> None:
 		state_dict = torch.load(checkpoint_path, map_location='cpu', weights_only=True)
@@ -103,8 +106,9 @@ class InferenceAgent:
 					print(f"! Warning; {model_name} not found in state_dict.")
 
 		del state_dict
-
+  
 	def save_video(self, vid_target_recon: torch.Tensor, video_path: str, audio_path: str) -> str:
+		os.makedirs(video_path, exist_ok=True)
 		with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as temp_video:
 			temp_filename = temp_video.name
 			vid = vid_target_recon.permute(0, 2, 3, 1)
@@ -112,8 +116,11 @@ class InferenceAgent:
 			vid = ((vid + 1) / 2 * 255).type('torch.ByteTensor')
 			torchvision.io.write_video(temp_filename, vid, fps=self.opt.fps)			
 			if audio_path is not None:
+				print("FOUND AUDIO")
+				
 				with open(os.devnull, 'wb') as f:
-					command =  "ffmpeg -i {} -i {} -c:v copy -c:a aac {} -y".format(temp_filename, audio_path, video_path)
+					out_name = f'seed={self.opt.seed}_{os.path.basename(self.opt.ref_path).split(".")[0]}_with_{os.path.basename(self.opt.aud_path).split(".")[0]}.mp4'
+					command =  "ffmpeg -i {} -i {} -c:v copy -c:a aac {}/{} -y".format(temp_filename, audio_path, video_path, out_name)
 					subprocess.call(command, shell=True, stdout=f, stderr=f)
 				if os.path.exists(video_path):
 					os.remove(temp_filename)
@@ -141,6 +148,8 @@ class InferenceAgent:
 		if verbose: print(f"> [Done] Preprocess.")
 
 		# inference
+		start_inf = time.time()
+		# inference = Whole FLOAT (audio encoder + image encoder + motion autoencoder + FMT sampling + decoder)
 		d_hat = self.G.inference(
 			data 		= data,
 			a_cfg_scale = a_cfg_scale,
@@ -150,8 +159,15 @@ class InferenceAgent:
 			nfe			= nfe,
 			seed		= seed
 			)['d_hat']
+		end_inf = time.time()
+		print(f"> [#TENSORRT] Inference completed () in {end_inf - start_inf:.2f} seconds.")
+		print(f"> [#TENSORRT] Inference FPS = {d_hat.shape[0] / (end_inf - start_inf):.2f} frames/sec.")
 
+		start_save = time.time()
 		res_video_path = self.save_video(d_hat, res_video_path, audio_path)
+		end_save = time.time()
+		print(f"> [#TENSORRT] Video saving completed in {end_save - start_save:.2f} seconds.")
+  
 		if verbose: print(f"> [Done] result saved at {res_video_path}")
 		return res_video_path
 
@@ -162,6 +178,8 @@ class InferenceOptions(BaseOptions):
 
 	def initialize(self, parser):
 		super().initialize(parser)
+		parser.add_argument("--trt_model_path",
+				required=True, type=str, help="Path to the TensorRT model file exported by export_trt.py")
 		parser.add_argument("--ref_path",
 				default=None, type=str,help='ref')
 		parser.add_argument('--aud_path',
@@ -173,9 +191,11 @@ class InferenceOptions(BaseOptions):
 		parser.add_argument('--res_video_path',
 				default=None, type=str, help='res video path')
 		parser.add_argument('--ckpt_path',
-				default="/home/nvadmin/workspace/taek/float-pytorch/checkpoints/float.pth", type=str, help='checkpoint path')
+				default="./checkpoints/float.pth", type=str, help='checkpoint path')
 		parser.add_argument('--res_dir',
 				default="./results", type=str, help='result dir')
+		parser.add_argument('--seed_everything', default=False,
+				action='store_true', help='seed everything for reproducibility')
 		return parser
 
 
@@ -199,6 +219,9 @@ if __name__ == '__main__':
 	else:
 		res_video_path = opt.res_video_path
 
+	if opt.seed_everything:
+		seed_everything(opt.seed)
+	start = time.time()
 	agent.run_inference(
 		res_video_path,
 		ref_path,
@@ -211,4 +234,5 @@ if __name__ == '__main__':
 		no_crop 	= opt.no_crop,
 		seed 		= opt.seed
 		)
-
+	end = time.time()
+	print(f"> [#TENSORRT] Total execution (Preprocess + TENSORRT + Save) time: {end - start:.2f} seconds.")

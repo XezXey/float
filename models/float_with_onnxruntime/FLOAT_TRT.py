@@ -20,9 +20,12 @@ from models import BaseModel
 from models.float_with_onnxruntime.generator import Generator
 from models.float_with_onnxruntime.FMT import FlowMatchingTransformer
 
+from accelerate_dev.trt_utils import TRTInferencer
+import pycuda.driver as cuda
+
 ######## Main Phase 2 model ########		
 class FLOAT(BaseModel):
-	def __init__(self, opt, onnx_model_path: str = None, onnx_provider: str = "cuda"):
+	def __init__(self, opt, trt_model_path: str = None):
 		super().__init__()
 		self.opt = opt
 
@@ -48,90 +51,43 @@ class FLOAT(BaseModel):
 		}
   
 		# ONNX Runtime session for forward_with_cfv
-		if onnx_model_path is None:
-			print("[#] No ONNX model path provided. Using PyTorch implementation. (For accelerate_dev/onnx_export.py)")
+		if trt_model_path is None:
+			print("[#] No TensorRT model path provided. Using PyTorch implementation. (For accelerate_dev/trt_export.py)")
 		else:
 			print("#"*100)
-			print(f"[#] Initializing ONNX Runtime session with model: {onnx_model_path} and provider: {onnx_provider}")
-			self.init_onnx_runtime(onnx_model_path, onnx_provider)
+			print(f"[#] Initializing TensorRT session with model: {trt_model_path}")
+			self.init_trt_engine(trt_model_path)
 			print("#"*100)
    
-	def init_onnx_runtime(self, onnx_model_path: str, onnx_provider: str):
+	def init_trt_engine(self, onnx_model_path: str):
 			self.onnx_model_path = onnx_model_path
-			
-			if not os.path.isfile(self.onnx_model_path):
-				raise FileNotFoundError(
-					f"ONNX model file not found at '{self.onnx_model_path}'. "
-					"Please run export_onnx.py to export it first."
-				)
-				
-			# Configure execution providers
-			if onnx_provider == "cuda":
-				self.providers = [
-        			("TensorrtExecutionProvider", {
-        			    "device_id": 0,
-        			    "trt_max_workspace_size": 2 * 1024 * 1024 * 1024,
-        			    "trt_fp16_enable": True,
-        			    "trt_engine_cache_enable": True,
-        			    "trt_engine_cache_path": "./trt_cache",
-        			}),
-					("CUDAExecutionProvider", {
-						"device_id": 0,
-						"arena_extend_strategy": "kNextPowerOfTwo",
-						"gpu_mem_limit": 2 * 1024 * 1024 * 1024,
-						"cudnn_conv_algo_search": "EXHAUSTIVE",
-						"do_copy_in_default_stream": True,
-					}),
-					"CPUExecutionProvider"
-				]
-			else:
-				self.providers = ["CPUExecutionProvider"]
-				
-			print(f"[ONNXPredictor] Initializing session with providers: {self.providers}")
-			self.session_options = ort.SessionOptions()
-			self.session_options.log_severity_level = 3  # Suppress INFO and WARNING logs from ONNX Runtime, 0 = VERBOSE, 1 = INFO, 2 = WARNING, 3 = ERROR
-			self.fmt_onnx_session = ort.InferenceSession(self.onnx_model_path, providers=self.providers, sess_options=self.session_options)
-			self.fmt_onnx_inputs = self.fmt_onnx_session.get_inputs()
-			self.fmt_onnx_outputs = self.fmt_onnx_session.get_outputs()
-			print(f"[ONNXPredictor] fmt_onnx_inputs: {[inp.name for inp in self.fmt_onnx_inputs]}")
-			print(f"[ONNXPredictor] fmt_onnx_outputs: {[out.name for out in self.fmt_onnx_outputs]}")
-
-			# Save input names for quick access during run
-			self.fmt_onnx_input_names = [inp.name for inp in self.fmt_onnx_inputs]
-			self.fmt_onnx_output_name = self.fmt_onnx_outputs[0].name
-
-			# Log which provider was actually chosen by ONNX Runtime
-			print("="*100)
-			print(f"[ONNXPredictor] Session successfully created. Active providers: {self.fmt_onnx_session.get_providers()}")
-			print(f"[ONNXPredictor] Inputs expected: {self.fmt_onnx_input_names}")
-			print(f"[ONNXPredictor] Output name: '{self.fmt_onnx_output_name}'")
-			print("="*100)
-	
-			self.warmup_onnx_runtime()
+			cuda.init()
+			self.context = cuda.Device(0).make_context()
+			self.trt_inferencer = TRTInferencer(self.opt.trt_model_path)
+			self.warmup_trt_engine()
   
 	@torch.no_grad()
-	def warmup_onnx_runtime(self):
-		print("[ONNXPredictor] Warming up ONNX Runtime with dummy inputs...")
-
-		from accelerate_dev._fmt_utils import load_fmt_wrapper, build_dummy_inputs, add_model_args
-		dummy_inputs = build_dummy_inputs(self.opt, device='cuda', batch=1)
-		feed_dict = {
-			"t": dummy_inputs[0].cpu().numpy().astype(np.float32),
-			"x": dummy_inputs[1].cpu().numpy().astype(np.float32),
-			"wa": dummy_inputs[2].cpu().numpy().astype(np.float32),
-			"wr": dummy_inputs[3].cpu().numpy().astype(np.float32),
-			"we": dummy_inputs[4].cpu().numpy().astype(np.float32),
-			"prev_x": dummy_inputs[5].cpu().numpy().astype(np.float32),
-			"prev_wa": dummy_inputs[6].cpu().numpy().astype(np.float32),
-			"a_cfg_scale": dummy_inputs[7].cpu().numpy().astype(np.float32),
-			"e_cfg_scale": dummy_inputs[8].cpu().numpy().astype(np.float32)
+	def warmup_trt_engine(self):
+		print("[#TENSORRT] Warming up TensorRT engine with dummy inputs...")
+		# --- Prepare inputs (example with batch_size=1) ---
+		B = 1
+		inputs = {
+			"t":           np.array([0.5],               dtype=np.float32),
+			"x":           np.random.rand(B, 50, 512).astype(np.float32),
+			"wa":          np.random.rand(B, 50, 512).astype(np.float32),
+			"wr":          np.random.rand(B, 512).astype(np.float32),
+			"we":          np.random.rand(B, 1, 7).astype(np.float32),
+			"prev_x":      np.random.rand(B, 10, 512).astype(np.float32),
+			"prev_wa":     np.random.rand(B, 10, 512).astype(np.float32),
+			"a_cfg_scale": np.array([1.0],               dtype=np.float32),
+			"e_cfg_scale": np.array([1.0],               dtype=np.float32),
 		}
-
+  
 		start_time = time.time()
 		for i in tqdm.tqdm(range(100)):
-			_ = self.fmt_onnx_session.run([self.fmt_onnx_output_name], feed_dict)
+			_ = self.trt_inferencer.infer(batch_size=B, **inputs)
 		end_time = time.time()
-		print(f"[ONNXPredictor] Warmup completed in {end_time - start_time:.2f} seconds.")
+		print(f"[#TENSORRT] Warmup completed in {end_time - start_time:.2f} seconds.")
  
  
 	######## Motion Encoder - Decoder ########
@@ -169,7 +125,7 @@ class FLOAT(BaseModel):
 		e_cfg_scale: float = 1.0,
 		emo: str = None,
 		nfe: int = 10,
-		seed: int = None
+		seed: int = None,
 	) -> torch.Tensor:
 
 		r_s, a = data['r_s'], data['a']
@@ -214,7 +170,7 @@ class FLOAT(BaseModel):
 				wa_t = F.pad(wa_t, (0, 0, 0, self.num_frames_for_clip - wa_t.shape[1]), mode='replicate')
 
 			def sample_chunk(tt, zt):
-				out = self.forward_with_cfv_onnxruntime(
+				out = self.forward_with_cfv_tensorrt(
 						t 			= tt.unsqueeze(0),
 						x 			= zt,
 						wa 			= wa_t, 			 
@@ -224,7 +180,7 @@ class FLOAT(BaseModel):
 						prev_wa 	= prev_wa_t,
 						a_cfg_scale = a_cfg_scale,
 						r_cfg_scale = r_cfg_scale,
-						e_cfg_scale = e_cfg_scale
+						e_cfg_scale = e_cfg_scale,
 					)
 				out_current = out[:, self.num_prev_frames:]
 				return out_current
@@ -235,6 +191,36 @@ class FLOAT(BaseModel):
 			sample.append(sample_t)
 		sample = torch.cat(sample, dim=1)[:, :T]
 		return sample
+
+	@torch.no_grad()
+	def forward_with_cfv_tensorrt(
+		self,
+		t,
+		x,
+		wa,
+		wr,
+		we,
+		prev_x,
+		prev_wa,
+		a_cfg_scale,
+		r_cfg_scale,
+		e_cfg_scale,
+	):
+		B = 1
+		inputs = {
+            "t": t.cpu().numpy().astype(np.float32),
+			"x": x.cpu().numpy().astype(np.float32),
+			"wa": wa.cpu().numpy().astype(np.float32),
+			"wr": wr.cpu().numpy().astype(np.float32),
+			"we": we.cpu().numpy().astype(np.float32),
+			"prev_x": prev_x.cpu().numpy().astype(np.float32),
+			"prev_wa": prev_wa.cpu().numpy().astype(np.float32),
+			"a_cfg_scale": np.array([a_cfg_scale], dtype=np.float32),
+			"e_cfg_scale": np.array([e_cfg_scale], dtype=np.float32)
+		}
+		outputs = self.trt_inferencer.infer(batch_size=B, **inputs)
+		output_numpy = outputs["output"]  # Adjust this key based on your actual output name
+		return torch.from_numpy(output_numpy).to(device=x.device)
 
 	@torch.no_grad()
 	def forward_with_cfv_onnxruntime(
@@ -294,13 +280,14 @@ class FLOAT(BaseModel):
 		start = time.time()
 		sample = self.sample(data, a_cfg_scale = a_cfg_scale, r_cfg_scale = r_cfg_scale, e_cfg_scale = e_cfg_scale, emo = emo, nfe = nfe, seed = seed)
 		end = time.time()
-		print(f"[#ONNXRUNTIME]> Sampling completed in {end - start:.2f} seconds.")
+		print(f"[#TENSORRT]> Sampling completed in {end - start:.2f} seconds.")
 		dec_start = time.time()
 		data_out = self.decode_latent_into_image(s_r = s_r, s_r_feats = s_r_feats, r_d = sample)
 		dec_end = time.time()
-		print(f"[#ONNXRUNTIME]> Decoding completed in {dec_end - dec_start:.2f} seconds.")
-		print(f"[#ONNXRUNTIME]> Achieved FPS = {data_out['d_hat'].shape[0] / (end - start):.2f} frames/sec.")
-		print(f"[#ONNXRUNTIME]> Video's shapes: {data_out['d_hat'].shape}")
+		print(f"[#TENSORRT]> Decoding completed in {dec_end - dec_start:.2f} seconds.")
+		print(f"[#TENSORRT]> Achieved FPS = {data_out['d_hat'].shape[0] / (end - start):.2f} frames/sec.")
+		print(f"[#TENSORRT]> Video's shapes: {data_out['d_hat'].shape}")
+		self.context.pop()  # Clean up CUDA context after inference
 		return data_out
 
 

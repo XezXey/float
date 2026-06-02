@@ -1,8 +1,8 @@
 import tensorrt as trt
 import pycuda.driver as cuda
 # import pycuda.autoinit
-cuda.init()
 # Use this instead of autoinit
+cuda.init()
 context = cuda.Device(0).make_context() 
 
 import numpy as np
@@ -95,38 +95,39 @@ class TRTInferencer:
 
         return results
     
-# --- Init (once) ---
-inferencer = TRTInferencer("./trt_models/fmt_onnx_maskfill_addcfg.trt")
+if __name__ == '__main__':
+    # --- Init (once) ---
+    inferencer = TRTInferencer("./trt_models/fmt_onnx_maskfill_addcfg.trt")
 
-# --- Prepare inputs (example with batch_size=1) ---
-B = 1
-inputs = {
-    "t":           np.array([0.5],               dtype=np.float32),
-    "x":           np.random.rand(B, 50, 512).astype(np.float32),
-    "wa":          np.random.rand(B, 50, 512).astype(np.float32),
-    "wr":          np.random.rand(B, 512).astype(np.float32),
-    "we":          np.random.rand(B, 1, 7).astype(np.float32),
-    "prev_x":      np.random.rand(B, 10, 512).astype(np.float32),
-    "prev_wa":     np.random.rand(B, 10, 512).astype(np.float32),
-    "a_cfg_scale": np.array([1.0],               dtype=np.float32),
-    "e_cfg_scale": np.array([1.0],               dtype=np.float32),
-}
+    # --- Prepare inputs (example with batch_size=1) ---
+    B = 1
+    inputs = {
+        "t":           np.array([0.5],               dtype=np.float32),
+        "x":           np.random.rand(B, 50, 512).astype(np.float32),
+        "wa":          np.random.rand(B, 50, 512).astype(np.float32),
+        "wr":          np.random.rand(B, 512).astype(np.float32),
+        "we":          np.random.rand(B, 1, 7).astype(np.float32),
+        "prev_x":      np.random.rand(B, 10, 512).astype(np.float32),
+        "prev_wa":     np.random.rand(B, 10, 512).astype(np.float32),
+        "a_cfg_scale": np.array([1.0],               dtype=np.float32),
+        "e_cfg_scale": np.array([1.0],               dtype=np.float32),
+    }
 
-n = 100
-import time
-# --- Run inference ---
-ss = time.time()
-for _ in range(n):
-    start_time = time.time()
-    outputs = inferencer.infer(batch_size=B, **inputs)
-    print(outputs["output"].shape)
-    end_time = time.time()
-    print(f"Inference time: {(end_time - start_time):.2f} ms")
-se = time.time()
-print(f"Total time: {(se - ss):.2f} s")
+    n = 100
+    import time
+    # --- Run inference ---
+    ss = time.time()
+    for _ in range(n):
+        start_time = time.time()
+        outputs = inferencer.infer(batch_size=B, **inputs)
+        print(outputs["output"].shape)
+        end_time = time.time()
+        print(f"Inference time: {(end_time - start_time):.2f} ms")
+    se = time.time()
+    print(f"Total time: {(se - ss):.2f} s")
 
-# --- Use results ---
-for name, tensor in outputs.items():
-    print(f"Output '{name}': shape={tensor.shape}, dtype={tensor.dtype}")
+    # --- Use results ---
+    for name, tensor in outputs.items():
+        print(f"Output '{name}': shape={tensor.shape}, dtype={tensor.dtype}")
 
-context.pop()  # Clean up CUDA context when done
+    context.pop()  # Clean up CUDA context when done

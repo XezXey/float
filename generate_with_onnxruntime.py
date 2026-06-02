@@ -15,7 +15,7 @@ from transformers import Wav2Vec2FeatureExtractor
 import sys
 sys.path.append('../../')
 from models.utils import seed_everything
-from models.float_with_onnxruntime.FLOAT import FLOAT
+from models.float_with_onnxruntime.FLOAT_ONNX import FLOAT
 from options.base_options import BaseOptions
 
 

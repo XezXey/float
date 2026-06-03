@@ -1,5 +1,6 @@
 import os
 import time
+import time as timer
 import tqdm
 
 import torch, math
@@ -211,6 +212,7 @@ class FLOAT(BaseModel):
 		else:
 			we = F.one_hot(torch.tensor(emo_idx, device = a.device), num_classes = self.opt.dim_e).unsqueeze(0).unsqueeze(0)
 
+		start_infer_clip = timer.time()
 		sample = []
 		# sampleing chunk by chunk
 		for t in range(0, int(math.ceil(T / self.num_frames_for_clip))):
@@ -265,9 +267,14 @@ class FLOAT(BaseModel):
 				return out_current
 
 			# solve ODE
+			start_infer_chunk = timer.time()
 			trajectory_t = odeint(sample_chunk, x0, time, **self.odeint_kwargs)
+			end_infer_chunk = timer.time()
+			print(f"[#TENSORRT] ODE solved for clip {t} in {end_infer_chunk - start_infer_chunk:.3f} seconds.")
 			sample_t = trajectory_t[-1]
 			sample.append(sample_t)
+		end_infer_clip = timer.time()
+		print(f"[#TENSORRT] Sampling completed for all clips in {end_infer_clip - start_infer_clip:.3f} seconds.")
 		sample = torch.cat(sample, dim=1)[:, :T]
 		return sample
 
@@ -397,15 +404,15 @@ class FLOAT(BaseModel):
 		if e_cfg_scale is None: e_cfg_scale = self.opt.e_cfg_scale
 
 		import time
-		start = time.time()
+		start_sample = time.time()
 		sample = self.sample(data, a_cfg_scale = a_cfg_scale, r_cfg_scale = r_cfg_scale, e_cfg_scale = e_cfg_scale, emo = emo, nfe = nfe, seed = seed)
-		end = time.time()
-		print(f"[#TENSORRT]> Sampling completed in {end - start:.2f} seconds.")
+		end_sample = time.time()
+		print(f"[#TENSORRT]> Sampling completed in {end_sample - start_sample:.2f} seconds.")
 		dec_start = time.time()
 		data_out = self.decode_latent_into_image(s_r = s_r, s_r_feats = s_r_feats, r_d = sample)
 		dec_end = time.time()
 		print(f"[#TENSORRT]> Decoding completed in {dec_end - dec_start:.2f} seconds.")
-		print(f"[#TENSORRT]> Achieved FPS = {data_out['d_hat'].shape[0] / (end - start):.2f} frames/sec.")
+		print(f"[#TENSORRT]> Achieved FPS = {data_out['d_hat'].shape[0] / (end_sample - start_sample):.2f} frames/sec.")
 		print(f"[#TENSORRT]> Video's shapes: {data_out['d_hat'].shape}")
 		return data_out
 

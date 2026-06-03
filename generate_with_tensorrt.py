@@ -151,8 +151,8 @@ class InferenceAgent:
 		if verbose: print(f"> [Done] Preprocess.")
 
 		# inference
-		start_inf = time.time()
 		# inference = Whole FLOAT (audio encoder + image encoder + motion autoencoder + FMT sampling + decoder)
+		start_inf = time.time()
 		d_hat = self.G.inference(
 			data 		= data,
 			a_cfg_scale = a_cfg_scale,

@@ -49,3 +49,5 @@ experiment/comparison
 experiment/where_to_tensorrt
 experiment/tensorrt_res
 experiment/tensorrt/
+experiment/integrate_student/
+experiment/misc/

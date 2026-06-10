@@ -4,6 +4,7 @@ import argparse
 
 parser = argparse.ArgumentParser(description="Visualize video files in a directory and its subdirectories.")
 parser.add_argument('--dir', type=str, required=True, help="Directory containing videos")
+parser.add_argument('--port', type=str, default=5000, help="Directory containing videos")
 args = parser.parse_args()
 
 app = Flask(__name__)
@@ -682,4 +683,4 @@ def serve_video(filename):
     return send_from_directory(VIDEO_DIR, filename)
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000, host='0.0.0.0')
+    app.run(debug=True, port=args.port, host='0.0.0.0')

@@ -1,5 +1,5 @@
 """
-	Inference Stage 2 - Flexible (PyTorch / TensorRT / Decoder-only TRT)
+	Inference Stage 2 (with chunk-wise timing)
 """
 
 import os, torch, random, cv2, torchvision, subprocess, librosa, datetime, tempfile, face_alignment, math
@@ -9,15 +9,13 @@ import albumentations as A
 import albumentations.pytorch.transforms as A_pytorch
 from torchdiffeq import odeint
 
-import time
 from tqdm import tqdm
+import time
 from pathlib import Path
 from transformers import Wav2Vec2FeatureExtractor
 
-import sys
-sys.path.append('../../')
 from models.utils import seed_everything
-from models.float_with_onnxruntime.FLOAT_TRT import FLOAT
+from models.float.FLOAT import FLOAT
 from options.base_options import BaseOptions
 
 
@@ -31,10 +29,7 @@ class FLOATWithTiming(FLOAT):
 			s_r_d_t = s_r + r_d[:, t]
 			torch.cuda.synchronize()
 			start_frame = time.time()
-			if getattr(self, 'trt_dec_inferencer', None) is not None:
-				img_t = self.forward_decoder_tensorrt(s_r_d_t, s_r_feats)
-			else:
-				img_t, _ = self.motion_autoencoder.dec(s_r_d_t, alpha = None, feats = s_r_feats)
+			img_t, _ = self.motion_autoencoder.dec(s_r_d_t, alpha=None, feats=s_r_feats)
 			torch.cuda.synchronize()
 			frame_decoding_times.append(time.time() - start_frame)
 			d_hat.append(img_t)
@@ -104,32 +99,19 @@ class FLOATWithTiming(FLOAT):
 				wa_t = F.pad(wa_t, (0, 0, 0, self.num_frames_for_clip - wa_t.shape[1]), mode='replicate')
 
 			def sample_chunk(tt, zt):
-				if getattr(self, 'trt_inferencer', None) is not None:
-					out = self.forward_with_cfv_tensorrt(
-							t 			= tt.unsqueeze(0),
-							x 			= zt,
-							wa 			= wa_t, 			 
-							wr 			= r_s,
-							we 			= we, 
-							prev_x 		= prev_x_t, 	
-							prev_wa 	= prev_wa_t,
-							a_cfg_scale = a_cfg_scale,
-							r_cfg_scale = r_cfg_scale,
-							e_cfg_scale = e_cfg_scale,
+				out = self.fmt.forward_with_cfv(
+						t 			= tt.unsqueeze(0),
+						x 			= zt,
+						wa 			= wa_t, 			 
+						wr 			= r_s,
+						we 			= we, 
+						prev_x 		= prev_x_t, 	
+						prev_wa 	= prev_wa_t,
+						a_cfg_scale = a_cfg_scale,
+						r_cfg_scale = r_cfg_scale,
+						e_cfg_scale = e_cfg_scale
 						)
-				else:
-					out = self.fmt.forward_with_cfv(
-							t 			= tt.unsqueeze(0),
-							x 			= zt,
-							wa 			= wa_t, 			 
-							wr 			= r_s,
-							we 			= we, 
-							prev_x 		= prev_x_t, 	
-							prev_wa 	= prev_wa_t,
-							a_cfg_scale = a_cfg_scale,
-							r_cfg_scale = r_cfg_scale,
-							e_cfg_scale = e_cfg_scale,
-						)
+
 				out_current = out[:, self.num_prev_frames:]
 				return out_current
 
@@ -203,6 +185,7 @@ class FLOATWithTiming(FLOAT):
 		print("="*50 + "\n")
 
 		return data_out
+
 
 class DataProcessor:
 	def __init__(self, opt):
@@ -279,9 +262,7 @@ class InferenceAgent:
 		self.data_processor = DataProcessor(opt)
 
 	def load_model(self) -> None:
-		trt_model_path = getattr(self.opt, 'trt_model_path', None)
-		trt_decoder_path = getattr(self.opt, 'trt_decoder_path', None)
-		self.G = FLOATWithTiming(self.opt, trt_model_path=trt_model_path, trt_decoder_path=trt_decoder_path)
+		self.G = FLOATWithTiming(self.opt)
 
 	def load_weight(self, checkpoint_path: str, rank: int) -> None:
 		state_dict = torch.load(checkpoint_path, map_location='cpu', weights_only=True)
@@ -294,7 +275,7 @@ class InferenceAgent:
 					print(f"! Warning; {model_name} not found in state_dict.")
 
 		del state_dict
-  
+
 	def save_video(self, vid_target_recon: torch.Tensor, video_path: str, audio_path: str) -> str:
 		os.makedirs(video_path, exist_ok=True)
 		with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as temp_video:
@@ -335,15 +316,6 @@ class InferenceAgent:
 		data = self.data_processor.preprocess(ref_path, audio_path, no_crop = no_crop)
 		if verbose: print(f"> [Done] Preprocess.")
 
-		# Determine labeling for printouts
-		run_mode = "PyTorch"
-		if getattr(self.G, 'trt_inferencer', None) is not None and getattr(self.G, 'trt_dec_inferencer', None) is not None:
-			run_mode = "TENSORRT"
-		elif getattr(self.G, 'trt_inferencer', None) is not None:
-			run_mode = "TENSORRT_FMT_ONLY"
-		elif getattr(self.G, 'trt_dec_inferencer', None) is not None:
-			run_mode = "TENSORRT_DECODER_ONLY"
-
 		# inference
 		start_inf = time.time()
 		d_hat = self.G.inference(
@@ -354,17 +326,17 @@ class InferenceAgent:
 			emo 		= emo,
 			nfe			= nfe,
 			seed		= seed
-		)['d_hat']
+			)['d_hat']
 		end_inf = time.time()
-		print(f"> [#{run_mode}] Inference completed () in {end_inf - start_inf:.2f} seconds.")
-		print(f"> [#{run_mode}] Inference FPS = {d_hat.shape[0] / (end_inf - start_inf):.2f} frames/sec.")
+		print(f"> [#FLOAT] Inference completed () in {end_inf - start_inf:.2f} seconds.")
+		print(f"> [#FLOAT] Inference FPS = {d_hat.shape[0] / (end_inf - start_inf):.2f} frames/sec.")
 
 		start_save = time.time()
 		res_video_path = self.save_video(d_hat, res_video_path, audio_path)
 		end_save = time.time()
-		print(f"> [#{run_mode}] Video saving completed in {end_save - start_save:.2f} seconds.")
-		print(f"> [Done] result saved at {res_video_path}")
-		return res_video_path, {'n_frames': d_hat.shape[0], 'mode': run_mode}
+		print(f"> [#FLOAT] Video saving completed in {end_save - start_save:.2f} seconds.")
+		if verbose: print(f"> [Done] result saved at {res_video_path}")
+		return res_video_path, {'n_frames': d_hat.shape[0]}
 
 
 class InferenceOptions(BaseOptions):
@@ -373,10 +345,6 @@ class InferenceOptions(BaseOptions):
 
 	def initialize(self, parser):
 		super().initialize(parser)
-		parser.add_argument("--trt_model_path",
-				default=None, type=str, help="Path to the TensorRT model file for FMT (optional)")
-		parser.add_argument("--trt_decoder_path",
-				default=None, type=str, help="Path to the TensorRT decoder engine file (optional)")
 		parser.add_argument("--ref_path",
 				default=None, type=str,help='ref')
 		parser.add_argument('--aud_path',
@@ -388,7 +356,7 @@ class InferenceOptions(BaseOptions):
 		parser.add_argument('--res_video_path',
 				default=None, type=str, help='res video path')
 		parser.add_argument('--ckpt_path',
-				default="./checkpoints/float.pth", type=str, help='checkpoint path')
+				default="/home/nvadmin/workspace/taek/float-pytorch/checkpoints/float.pth", type=str, help='checkpoint path')
 		parser.add_argument('--res_dir',
 				default="./results", type=str, help='result dir')
 		parser.add_argument('--seed_everything', default=False,
@@ -418,24 +386,20 @@ if __name__ == '__main__':
 
 	if opt.seed_everything:
 		seed_everything(opt.seed)
-	try:
-		start = time.time()
-		_, misc = agent.run_inference(
-			res_video_path,
-			ref_path,
-			aud_path,
-			a_cfg_scale = opt.a_cfg_scale,
-			r_cfg_scale = opt.r_cfg_scale,
-			e_cfg_scale = opt.e_cfg_scale,
-			emo 		= opt.emo,
-			nfe			= opt.nfe,
-			no_crop 	= opt.no_crop,
-			seed 		= opt.seed
-			)
-		end = time.time()
-		run_mode = misc.get('mode', 'UNKNOWN')
-		print(f"> [#{run_mode}] Total execution (Preprocess + {run_mode} + Save) time: {end - start:.2f} seconds.")
-		print(f"> [#{run_mode}] Total execution FPS = {misc['n_frames'] / (end - start):.2f} frames/sec.")
-	finally:
-		if getattr(agent.G, 'context', None) is not None:
-			agent.G.context.pop()  # Clean up CUDA context after all done
+	start = time.time()
+	_, misc = agent.run_inference(
+		res_video_path,
+		ref_path,
+		aud_path,
+		a_cfg_scale = opt.a_cfg_scale,
+		r_cfg_scale = opt.r_cfg_scale,
+		e_cfg_scale = opt.e_cfg_scale,
+		emo 		= opt.emo,
+		nfe			= opt.nfe,
+		no_crop 	= opt.no_crop,
+		seed 		= opt.seed
+		)
+	
+	end = time.time()
+	print(f"> [#FLOAT] Total execution (Preprocess + FLOAT + Save) time: {end - start:.2f} seconds.")
+	print(f"> [#FLOAT] Total execution FPS = {misc['n_frames'] / (end - start):.2f} frames/sec.")

@@ -101,14 +101,28 @@ class StudentFLOATWithTRTDecoder(StudentFLOAT):
 	def decode_latent_into_image(self, s_r: torch.Tensor, s_r_feats: list, r_d: torch.Tensor) -> dict:
 		T = r_d.shape[1]
 		d_hat = []
+		frame_decoding_times = []
 		for t in range(T):
 			s_r_d_t = s_r + r_d[:, t]
+			torch.cuda.synchronize()
+			start_frame = time.time()
 			if self.trt_dec_inferencer is not None:
 				img_t = self.forward_decoder_tensorrt(s_r_d_t, s_r_feats)
 			else:
 				img_t, _ = self.motion_autoencoder.dec(s_r_d_t, alpha=None, feats=s_r_feats)
+			torch.cuda.synchronize()
+			frame_decoding_times.append(time.time() - start_frame)
 			d_hat.append(img_t)
 		d_hat = torch.stack(d_hat, dim=1).squeeze()
+
+		# Group the frame decoding times chunk-wise
+		num_frames_for_clip = self.num_frames_for_clip
+		num_chunks = int(math.ceil(T / num_frames_for_clip))
+		self.chunk_decoding_times = []
+		for c in range(num_chunks):
+			chunk_frames_times = frame_decoding_times[c * num_frames_for_clip : (c + 1) * num_frames_for_clip]
+			self.chunk_decoding_times.append(sum(chunk_frames_times))
+
 		return {'d_hat': d_hat}
 
 	@torch.no_grad()
@@ -137,6 +151,7 @@ class StudentFLOATWithTRTDecoder(StudentFLOAT):
 			we = F.one_hot(torch.tensor(emo_idx, device=a.device), num_classes=self.opt.dim_e).unsqueeze(0).unsqueeze(0)
 
 		sample = []
+		self.chunk_generation_times = []
 		start_GenVideo_time = time.time()
 		total_fmt_inference_time = 0.0
 		# sampling chunk by chunk
@@ -160,6 +175,7 @@ class StudentFLOATWithTRTDecoder(StudentFLOAT):
 
 			t_zero = torch.zeros(B, device=self.opt.rank)
 			
+			torch.cuda.synchronize()
 			start_inference_time = time.time()
 			# Replicate generate_mint.py inference logic: Call forward directly, passing lambda weights in self.opt.
 			v_pred = self.fmt.forward(
@@ -177,14 +193,75 @@ class StudentFLOATWithTRTDecoder(StudentFLOAT):
 				)
 			
 			sample_t = x0 + v_pred[:, self.num_prev_frames:]
+			print("Chunk shape: ", sample_t.shape)
 			sample.append(sample_t)
+			torch.cuda.synchronize()
 			end_inference_time = time.time()
-			total_fmt_inference_time += (end_inference_time - start_inference_time)
-			print(f"[#STUDENT] Inference completed for clip {t} in {end_inference_time - start_inference_time:.3f} seconds.")
+			gen_t_duration = end_inference_time - start_inference_time
+			self.chunk_generation_times.append(gen_t_duration)
+			total_fmt_inference_time += gen_t_duration
+			print(f"[#STUDENT] Inference completed for clip {t} in {gen_t_duration:.3f} seconds.")
    
 		print(f"Total sampling time for all clips: {time.time() - start_GenVideo_time:.6f} seconds.")
 		sample = torch.cat(sample, dim=1)[:, :T]
 		return sample
+
+	@torch.no_grad()
+	def inference(
+		self,
+		data: dict,
+		a_cfg_scale = None,
+		r_cfg_scale = None,
+		e_cfg_scale = None,
+		emo			= None,
+		seed		= None,
+	) -> dict:
+		s, a = data['s'], data['a']
+		s_r, r_s_lambda, s_r_feats = self.encode_image_into_latent(s.to(self.opt.rank))
+		if 's_r' in data:
+			r_s = self.encode_identity_into_motion(s_r)
+		else:
+			r_s = self.motion_autoencoder.dec.direction(r_s_lambda)
+		data['r_s'] = r_s
+
+		# set conditions
+		if a_cfg_scale is None: a_cfg_scale = self.opt.a_cfg_scale
+		if r_cfg_scale is None: r_cfg_scale = self.opt.r_cfg_scale
+		if e_cfg_scale is None: e_cfg_scale = self.opt.e_cfg_scale
+
+		sample = self.sample(data, a_cfg_scale = a_cfg_scale, r_cfg_scale = r_cfg_scale, e_cfg_scale = e_cfg_scale, emo = emo, seed = seed)
+		data_out = self.decode_latent_into_image(s_r = s_r, s_r_feats = s_r_feats, r_d = sample)
+
+		# Print chunk-wise timing summary
+		print("\n" + "="*50)
+		print("          CHUNK-WISE RUNTIME SUMMARY          ")
+		print("="*50)
+		total_chunks = len(self.chunk_generation_times)
+		totals = []
+		for c in range(total_chunks):
+			gen_t = self.chunk_generation_times[c]
+			dec_t = self.chunk_decoding_times[c] if c < len(self.chunk_decoding_times) else 0.0
+			chunk_total = gen_t + dec_t
+			totals.append(chunk_total)
+			print(f"Chunk {c:02d}:")
+			print(f"  - Generation Time: {gen_t:.4f} seconds")
+			print(f"  - Decoding Time:   {dec_t:.4f} seconds")
+			print(f"  - Total Time:      {chunk_total:.4f} seconds")
+		print("-"*50)
+		if total_chunks > 0:
+			mean_gen = np.mean(self.chunk_generation_times)
+			std_gen = np.std(self.chunk_generation_times)
+			mean_dec = np.mean(self.chunk_decoding_times)
+			std_dec = np.std(self.chunk_decoding_times)
+			mean_tot = np.mean(totals)
+			std_tot = np.std(totals)
+			print(f"Statistics across {total_chunks} chunks:")
+			print(f"  - Generation Time: {mean_gen:.4f} ± {std_gen:.4f} seconds")
+			print(f"  - Decoding Time:   {mean_dec:.4f} ± {std_dec:.4f} seconds")
+			print(f"  - Total Time:      {mean_tot:.4f} ± {std_tot:.4f} seconds")
+		print("="*50 + "\n")
+
+		return data_out
 
 
 class InferenceAgent:

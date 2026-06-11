@@ -219,8 +219,8 @@ class AudioEncoder(BaseModel):
 		self.opt = opt
 		self.only_last_features = opt.only_last_features
 		
-		self.num_frames_for_clip = int(opt.wav2vec_sec * self.opt.fps)
-		self.num_prev_frames = int(opt.num_prev_frames)
+		self.num_frames_for_clip = int(opt.wav2vec_sec * self.opt.fps)	# 50 frames (wav2vec_sec = 2 seconds, fps = 25) => 50 frames for each chunk
+		self.num_prev_frames = int(opt.num_prev_frames)	# 10 frames
 
 		self.wav2vec2 = Wav2VecModel.from_pretrained(opt.wav2vec_model_path, local_files_only = True)
 		self.wav2vec2.feature_extractor._freeze_parameters()

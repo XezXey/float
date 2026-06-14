@@ -729,6 +729,7 @@
         let chunkQueue = [];
         let isPlayingChunk = false;
         let isAvatarLoaded = false;
+        let lastIdleChunk = null;
         
         // Active timeouts / intervals for frames
         let frameRenderInterval = null;
@@ -869,7 +870,12 @@
                 const nextChunk = chunkQueue.shift();
                 playChunk(nextChunk);
             } else if (chunkQueue.length === 0 && !isPlayingChunk) {
-                stopPlayback();
+                if (lastIdleChunk) {
+                    // Replay the last idle chunk to keep the avatar breathing naturally without freezing
+                    playChunk(lastIdleChunk);
+                } else {
+                    stopPlayback();
+                }
             }
         }
         
@@ -891,6 +897,11 @@
             isPlayingChunk = true;
             placeholder.style.opacity = 0;
             setTimeout(() => { placeholder.style.display = 'none'; }, 200);
+            
+            // Save the last idle chunk for fallback loop
+            if (chunk.text_id === "idle") {
+                lastIdleChunk = chunk;
+            }
             
             // Ensure audio context is initialized
             initAudio();
@@ -1077,6 +1088,7 @@
         });
 
         async function handleAvatarUpload(file) {
+            lastIdleChunk = null;
             initAudio();
             log(`Uploading portrait image: ${file.name}...`);
             loadingSpinner.style.display = 'block';

@@ -4,6 +4,7 @@ import time
 import asyncio
 import threading
 import queue
+from multiprocessing.pool import ThreadPool
 import collections
 import shutil
 import tempfile
@@ -61,6 +62,8 @@ avatar_data = None
 active_connections = set()
 active_texts = {}
 is_preparing_speech = False
+current_speech_text_id = None
+jpeg_encode_pool = ThreadPool(processes=8)
 
 # Setup templates
 templates = Jinja2Templates(directory="demo/templates")
@@ -172,7 +175,8 @@ def producer_thread_func():
                     audio_features=wa_t,
                     hidden_states=hidden_states,
                     avatar_data=avatar_data,
-                    emo=emotion
+                    emo=emotion,
+                    seed=int(np.random.randint(1, 1000000))
                 )
             except queue.Empty:
                 is_active = False
@@ -185,14 +189,16 @@ def producer_thread_func():
             try:
                 if hidden_states is None:
                     hidden_states = {}
-                hidden_states['raw_audio_tensor'] = torch.zeros(1, 32000, device=pipeline.opt.rank)
+                # hidden_states['raw_audio_tensor'] = torch.zeros(1, 32000, device=pipeline.opt.rank)
+                hidden_states['raw_audio_tensor'] = torch.randn(1, 32000, device=pipeline.opt.rank)
                 
                 frames, hidden_states = pipeline.inference_step(
                     audio_features=idle_wa,
                     hidden_states=hidden_states,
                     avatar_data=avatar_data,
                     # emo='neutral'
-                    emo='happy'
+                    emo='happy',
+                    seed=int(np.random.randint(1, 1000000))
                 )
                 audio_samples = idle_samples
                 text_id = "idle"
@@ -214,10 +220,8 @@ def producer_thread_func():
         # 4. Convert frames to uint8 RGB numpy array [50, 512, 512, 3]
         vid = stream_output(frames)
         
-        # 5. Pack the entire chunk into a list of JPEGs and push once
-        base64_frames = []
-        for i in range(50):
-            base64_frames.append(encode_frame_to_base64(vid[i]))
+        # 5. Pack the entire chunk into a list of JPEGs in parallel
+        base64_frames = jpeg_encode_pool.map(encode_frame_to_base64, vid)
             
         print(f"[Producer] Produced chunk for text_id={text_id} (chunk_idx={chunk_idx}/{total_chunks}) - inf_time={inf_time*1000:.1f}ms")
         frame_buffer.put((base64_frames, audio_samples, text_id, chunk_idx, total_chunks, inf_time, mean_inf))
@@ -289,10 +293,75 @@ async def init_avatar(file: UploadFile = File(...)):
         print(f"[Server Error] init_avatar failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+import re
+
+def split_into_sentences(text: str):
+    """Splits text into sentences based on punctuation, keeping punctuation with the sentence."""
+    sentences = [s.strip() for s in re.split(r'(?<=[.?!])\s+', text) if s.strip()]
+    if not sentences:
+        sentences = [text]
+    return sentences
+
+async def process_subsequent_sentences(sentences, text_id, emotion):
+    """Asynchronously processes subsequent sentences in the background to minimize startup latency."""
+    global current_speech_text_id
+    try:
+        loop = asyncio.get_event_loop()
+        chunk_size = 32000
+        
+        for idx, sentence in enumerate(sentences):
+            # Check if this prompt has been cancelled/overwritten by a newer one
+            if current_speech_text_id != text_id:
+                print(f"[Server] Background processing for {text_id} cancelled (superseded by new prompt).")
+                break
+                
+            print(f"[Server] Background processing sentence: '{sentence}'")
+            samples = await loop.run_in_executor(None, text_to_speech_samples, sentence)
+            
+            if current_speech_text_id != text_id:
+                break
+                
+            # Pad
+            if len(samples) % chunk_size != 0:
+                pad_len = chunk_size - (len(samples) % chunk_size)
+                samples = np.pad(samples, (0, pad_len), mode='constant', constant_values=0)
+                
+            num_chunks = len(samples) // chunk_size
+            
+            def segment_and_extract(audio_samples):
+                chunks = []
+                for c_idx in range(num_chunks):
+                    chunk_samples = audio_samples[c_idx * chunk_size : (c_idx + 1) * chunk_size]
+                    processed = pipeline.process_audio_chunk(chunk_samples)
+                    chunks.append({
+                        'audio_features': processed['audio_features'].cpu(),
+                        'raw_audio_samples': chunk_samples,
+                        'raw_audio_tensor': processed['raw_audio_tensor'].cpu(),
+                        'emotion': emotion,
+                        'text_id': text_id,
+                        'chunk_idx': c_idx,
+                        'total_chunks': num_chunks
+                    })
+                return chunks
+                
+            chunks = await loop.run_in_executor(None, segment_and_extract, samples)
+            
+            if current_speech_text_id != text_id:
+                break
+                
+            # Queue them
+            for chunk in chunks:
+                pending_audio_queue.put(chunk)
+                
+            print(f"[Server] Background queued {len(chunks)} chunks for sentence.")
+            
+    except Exception as e:
+        print(f"[Server Error] Background sentence processing failed: {e}")
+
 @app.post("/submit_text")
 async def submit_text(req: TextRequest):
-    """Processes incoming text input, runs TTS, and queues audio features for the producer loop."""
-    global is_preparing_speech
+    """Processes incoming text input, runs TTS on the first sentence synchronously to start playing immediately, and queues the rest in a background task."""
+    global is_preparing_speech, current_speech_text_id
     if avatar_data is None:
         raise HTTPException(status_code=400, detail="Avatar not initialized. Please upload a portrait first.")
         
@@ -302,6 +371,7 @@ async def submit_text(req: TextRequest):
         
         # 1. Assign unique text_id and map text content
         text_id = f"txt_{int(time.time() * 1000)}"
+        current_speech_text_id = text_id
         active_texts[text_id] = req.text
         
         # Clear frame buffer (discard unplayed idle chunks) and pending audio queue
@@ -319,9 +389,15 @@ async def submit_text(req: TextRequest):
             except Exception as e:
                 print(f"[WebSocket Error] Failed to send prepare_speech: {e}")
         
+        # Split text into sentences for streaming/pipelining
+        sentences = split_into_sentences(req.text)
+        first_sentence = sentences[0]
+        
+        print(f"[Server] Processing first sentence synchronously: '{first_sentence}'")
+        
         # 3. Run TTS in executor (Measure timing here)
         start_tts = time.time()
-        samples = await loop.run_in_executor(None, text_to_speech_samples, req.text)
+        samples = await loop.run_in_executor(None, text_to_speech_samples, first_sentence)
         tts_time = time.time() - start_tts
         
         # 4. Pad samples to match 2-second chunks (32000 samples)
@@ -332,7 +408,6 @@ async def submit_text(req: TextRequest):
             samples = np.pad(samples, (0, pad_len), mode='constant', constant_values=0)
             
         duration_sec = len(samples) / 16000.0
-        print(f"[Server] Synthesized speech duration: {duration_sec:.2f} seconds. Segmenting chunks...")
         
         # 5. Extract features block-by-block (running wav2vec2 encoder in executor)
         def segment_and_extract(audio_samples):
@@ -358,6 +433,11 @@ async def submit_text(req: TextRequest):
         for chunk in chunks:
             pending_audio_queue.put(chunk)
             
+        # 7. If there are more sentences, spawn background processing task
+        if len(sentences) > 1:
+            print(f"[Server] Spawning background task to process remaining {len(sentences) - 1} sentences...")
+            asyncio.create_task(process_subsequent_sentences(sentences[1:], text_id, req.emotion))
+            
         return {
             "status": "success", 
             "text_id": text_id, 
@@ -373,12 +453,13 @@ async def submit_text(req: TextRequest):
 
 @app.websocket("/stream")
 async def stream_websocket(websocket: WebSocket):
-    """WebSocket endpoint pushing video frames and audio chunks to client at playback rate."""
+    """WebSocket endpoint pushing video frames and audio chunks to client at playback rate, with startup burst buffering."""
     await websocket.accept()
     active_connections.add(websocket)
     print(f"[WebSocket] Client connected. Total active connections: {len(active_connections)}")
     
-    frame_interval = 1.0 / 25.0  # 40ms per frame for 25 FPS
+    last_text_id = None
+    chunks_sent_for_current_text = 0
     
     try:
         while True:
@@ -389,6 +470,13 @@ async def stream_websocket(websocket: WebSocket):
             
             if item is not None:
                 base64_frames, audio_slice, text_id, chunk_idx, total_chunks, inf_time, mean_inf = item
+                
+                # If we transition to a new segment (idle -> speech or speech -> idle),
+                # reset the burst counter to build a fresh client-side buffer
+                if text_id != last_text_id:
+                    chunks_sent_for_current_text = 0
+                    last_text_id = text_id
+                
                 print(f"[WebSocket] Sending chunk for text_id={text_id} (chunk_idx={chunk_idx}/{total_chunks}) - buffer size remaining: {len(frame_buffer)}")
                 # Send frame JPEGs + audio floats as a single chunk payload to client
                 await websocket.send_json({
@@ -402,10 +490,17 @@ async def stream_websocket(websocket: WebSocket):
                     "mean_inf_ms": int(mean_inf * 1000)
                 })
                 
-                # Sleep to maintain a steady 2.0 seconds interval per chunk
-                elapsed = time.time() - start_time
-                sleep_time = max(0, 2.0 - elapsed)
-                await asyncio.sleep(sleep_time)
+                chunks_sent_for_current_text += 1
+                
+                # Send the first 2 chunks of any new stream segment immediately (burst)
+                # to build a healthy client-side queue and absorb network jitter
+                if chunks_sent_for_current_text <= 2:
+                    await asyncio.sleep(0.05)  # 50ms small gap to prevent TCP congestion
+                else:
+                    # Sleep to maintain a steady 2.0 seconds interval per chunk
+                    elapsed = time.time() - start_time
+                    sleep_time = max(0, 2.0 - elapsed)
+                    await asyncio.sleep(sleep_time)
             else:
                 # Buffer empty (e.g. initial buffering), pause briefly (10ms)
                 await asyncio.sleep(0.010)

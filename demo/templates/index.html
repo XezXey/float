@@ -106,11 +106,6 @@
             box-shadow: 0 0 10px rgba(34, 197, 94, 0.5);
         }
 
-        .status-dot.warning {
-            background: #f59e0b;
-            box-shadow: 0 0 10px rgba(245, 158, 11, 0.5);
-        }
-
         main {
             flex: 1;
             max-width: 1400px;
@@ -118,7 +113,7 @@
             margin: 0 auto;
             padding: 40px;
             display: grid;
-            grid-template-columns: 1fr 1.2fr;
+            grid-template-columns: 1fr 1fr;
             gap: 40px;
         }
 
@@ -138,12 +133,12 @@
             background: var(--card-bg);
             border: 1px solid var(--border-color);
             border-radius: 20px;
-            padding: 32px;
+            padding: 24px;
             backdrop-filter: var(--glass-blur);
             box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
             display: flex;
             flex-direction: column;
-            gap: 24px;
+            gap: 20px;
             position: relative;
             overflow: hidden;
             transition: border-color 0.3s ease;
@@ -167,7 +162,7 @@
         .upload-area {
             border: 2px dashed rgba(102, 252, 241, 0.3);
             border-radius: 16px;
-            padding: 40px 20px;
+            padding: 24px 20px;
             text-align: center;
             cursor: pointer;
             transition: all 0.3s ease;
@@ -175,7 +170,7 @@
             display: flex;
             flex-direction: column;
             align-items: center;
-            gap: 16px;
+            gap: 12px;
         }
 
         .upload-area:hover, .upload-area.dragover {
@@ -184,17 +179,17 @@
         }
 
         .upload-icon {
-            font-size: 48px;
+            font-size: 32px;
             color: var(--primary);
         }
 
         .upload-text h3 {
-            font-size: 16px;
-            margin-bottom: 6px;
+            font-size: 15px;
+            margin-bottom: 4px;
         }
 
         .upload-text p {
-            font-size: 13px;
+            font-size: 12px;
             color: var(--text-muted);
         }
 
@@ -204,14 +199,13 @@
 
         .avatar-preview-container {
             display: flex;
-            gap: 20px;
+            gap: 16px;
             align-items: center;
-            margin-top: 10px;
         }
 
         .avatar-thumbnail {
-            width: 90px;
-            height: 90px;
+            width: 70px;
+            height: 70px;
             border-radius: 12px;
             object-fit: cover;
             border: 2px solid var(--primary);
@@ -219,6 +213,13 @@
         }
 
         /* Control Form */
+        .form-row {
+            display: grid;
+            grid-template-columns: 1.5fr 1fr;
+            gap: 16px;
+            align-items: center;
+        }
+
         .form-group {
             display: flex;
             flex-direction: column;
@@ -226,36 +227,141 @@
         }
 
         label {
-            font-size: 14px;
+            font-size: 13px;
             font-weight: 600;
             color: var(--text-muted);
         }
 
-        input[type="text"], select {
+        select {
             width: 100%;
             background: rgba(255, 255, 255, 0.05);
             border: 1px solid rgba(255, 255, 255, 0.1);
-            padding: 14px 18px;
-            border-radius: 12px;
+            padding: 10px 14px;
+            border-radius: 10px;
             color: var(--text-color);
             font-family: inherit;
-            font-size: 15px;
+            font-size: 14px;
             outline: none;
             transition: all 0.3s ease;
         }
 
-        input[type="text"]:focus, select:focus {
+        select:focus {
             border-color: var(--primary);
             background: rgba(255, 255, 255, 0.08);
-            box-shadow: 0 0 10px rgba(0, 255, 204, 0.1);
+        }
+
+        /* Chat Interface Styles */
+        #chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            min-height: 280px;
+            max-height: 380px;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.03);
+        }
+
+        .chat-bubble {
+            max-width: 85%;
+            padding: 12px 16px;
+            border-radius: 16px;
+            font-size: 15px;
+            line-height: 1.45;
+            position: relative;
+            animation: fadeIn 0.3s ease;
+            transition: all 0.3s ease;
+        }
+
+        .chat-bubble.bot {
+            align-self: flex-start;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-bottom-left-radius: 4px;
+        }
+
+        .chat-bubble.user {
+            align-self: flex-end;
+            background: linear-gradient(135deg, rgba(0, 255, 204, 0.15), rgba(0, 210, 255, 0.15));
+            border: 1px solid rgba(0, 255, 204, 0.2);
+            border-bottom-right-radius: 4px;
+        }
+
+        .chat-bubble.active-playing {
+            border-color: var(--accent);
+            box-shadow: 0 0 12px rgba(255, 0, 127, 0.35);
+            background: rgba(255, 0, 127, 0.08);
+            transform: scale(1.01);
+        }
+
+        .bubble-sender {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-muted);
+            margin-bottom: 4px;
+            font-family: 'Space Mono', monospace;
+            text-transform: uppercase;
+        }
+
+        .chat-bubble.user .bubble-sender {
+            color: var(--primary);
+            text-align: right;
+        }
+
+        .quick-prompts {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-top: 4px;
+        }
+
+        .quick-prompt-btn {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 20px;
+            padding: 6px 12px;
+            font-size: 12px;
+            color: var(--text-muted);
+            cursor: pointer;
+            transition: all 0.2s ease;
+            text-align: left;
+        }
+
+        .quick-prompt-btn:hover {
+            border-color: var(--primary);
+            color: var(--primary);
+            background: rgba(0, 255, 204, 0.05);
+            transform: translateY(-1px);
+        }
+
+        textarea {
+            width: 100%;
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            padding: 12px 16px;
+            border-radius: 12px;
+            color: var(--text-color);
+            font-family: inherit;
+            font-size: 14px;
+            outline: none;
+            resize: none;
+            transition: all 0.3s ease;
+        }
+
+        textarea:focus {
+            border-color: var(--primary);
+            background: rgba(255, 255, 255, 0.06);
         }
 
         .btn {
             background: linear-gradient(90deg, var(--primary), #00d2ff);
-            color: #0b0c10;
+            color: #0d0e12;
             font-weight: 700;
-            font-size: 16px;
-            padding: 16px 28px;
+            font-size: 15px;
+            padding: 12px 24px;
             border: none;
             border-radius: 12px;
             cursor: pointer;
@@ -263,18 +369,17 @@
             display: flex;
             justify-content: center;
             align-items: center;
-            gap: 10px;
-            box-shadow: 0 4px 20px rgba(0, 255, 204, 0.25);
+            box-shadow: 0 4px 15px rgba(0, 255, 204, 0.2);
         }
 
         .btn:hover {
             transform: translateY(-2px);
-            box-shadow: 0 6px 24px rgba(0, 255, 204, 0.4);
+            box-shadow: 0 6px 20px rgba(0, 255, 204, 0.35);
         }
 
         .btn:disabled {
-            background: #374151;
-            color: #9ca3af;
+            background: #27272a;
+            color: #71717a;
             cursor: not-allowed;
             transform: none;
             box-shadow: none;
@@ -293,7 +398,7 @@
             max-width: 512px;
             margin: 0 auto;
             border: 1px solid rgba(255, 255, 255, 0.05);
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
             position: relative;
             overflow: hidden;
         }
@@ -319,12 +424,33 @@
         }
 
         .spinner {
-            width: 40px;
-            height: 40px;
-            border: 4px solid rgba(0, 255, 204, 0.1);
+            width: 36px;
+            height: 36px;
+            border: 3px solid rgba(0, 255, 204, 0.1);
             border-left-color: var(--primary);
             border-radius: 50%;
             animation: spin 1s linear infinite;
+        }
+
+        /* Play progress card */
+        .active-speech-card {
+            background: rgba(255, 0, 127, 0.04);
+            border: 1px solid rgba(255, 0, 127, 0.2);
+            padding: 16px;
+            border-radius: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            box-shadow: 0 0 10px rgba(255, 0, 127, 0.05);
+            animation: fadeIn 0.3s ease;
+        }
+
+        .speech-text-display {
+            font-size: 15px;
+            font-weight: 600;
+            color: var(--accent);
+            line-height: 1.4;
+            font-style: italic;
         }
 
         /* Stats indicators */
@@ -335,7 +461,7 @@
         }
 
         .metric-card {
-            background: rgba(255, 255, 255, 0.03);
+            background: rgba(255, 255, 255, 0.02);
             border: 1px solid rgba(255, 255, 255, 0.05);
             padding: 16px;
             border-radius: 12px;
@@ -345,7 +471,7 @@
         }
 
         .metric-label {
-            font-size: 12px;
+            font-size: 11px;
             color: var(--text-muted);
             text-transform: uppercase;
             letter-spacing: 1px;
@@ -353,7 +479,7 @@
         }
 
         .metric-value {
-            font-size: 20px;
+            font-size: 18px;
             font-weight: 700;
             font-family: 'Space Mono', monospace;
         }
@@ -361,8 +487,8 @@
         .buffer-health-container {
             width: 100%;
             background: rgba(255, 255, 255, 0.05);
-            height: 8px;
-            border-radius: 4px;
+            height: 6px;
+            border-radius: 3px;
             overflow: hidden;
             margin-top: 4px;
         }
@@ -376,13 +502,13 @@
 
         #log-area {
             background: #08090d;
-            border: 1px solid rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.04);
             border-radius: 12px;
-            padding: 16px;
+            padding: 14px;
             font-family: 'Space Mono', monospace;
-            font-size: 13px;
+            font-size: 12px;
             color: #22c55e;
-            height: 120px;
+            height: 110px;
             overflow-y: auto;
             white-space: pre-wrap;
         }
@@ -391,19 +517,9 @@
             to { transform: rotate(360deg); }
         }
 
-        /* Custom scrollbar */
-        ::-webkit-scrollbar {
-            width: 6px;
-        }
-        ::-webkit-scrollbar-track {
-            background: rgba(0, 0, 0, 0.1);
-        }
-        ::-webkit-scrollbar-thumb {
-            background: rgba(255, 255, 255, 0.1);
-            border-radius: 3px;
-        }
-        ::-webkit-scrollbar-thumb:hover {
-            background: rgba(255, 255, 255, 0.2);
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(4px); }
+            to { opacity: 1; transform: translateY(0); }
         }
     </style>
 </head>
@@ -430,46 +546,69 @@
             <!-- Card 1: Portrait Uploader -->
             <div class="card">
                 <div class="card-title">1. Reference Portrait</div>
-                <div class="upload-area" id="drop-zone">
-                    <div class="upload-icon">👤</div>
-                    <div class="upload-text">
-                        <h3>Drag & drop reference image</h3>
-                        <p>Supports PNG or JPG (will crop face automatically)</p>
+                <div class="form-row">
+                    <div class="upload-area" id="drop-zone">
+                        <div class="upload-icon">👤</div>
+                        <div class="upload-text">
+                            <h3>Upload portrait image</h3>
+                            <p>Will auto-crop the face region</p>
+                        </div>
+                        <input type="file" id="file-input" accept="image/*">
                     </div>
-                    <input type="file" id="file-input" accept="image/*">
-                </div>
-                <div id="avatar-details" style="display: none;">
-                    <div class="avatar-preview-container">
-                        <img id="avatar-preview" class="avatar-thumbnail" src="" alt="Avatar Preview">
-                        <div>
-                            <h4 style="font-weight: 600;">Active Avatar</h4>
-                            <p id="avatar-filename" style="font-size: 14px; color: var(--text-muted);"></p>
+                    <div id="avatar-details">
+                        <div class="avatar-preview-container" id="avatar-empty-preview">
+                            <div class="avatar-thumbnail" style="display:flex; align-items:center; justify-content:center; background:rgba(255,255,255,0.02); border: 2px dashed rgba(255,255,255,0.1); box-shadow:none;">?</div>
+                            <span style="font-size: 13px; color:var(--text-muted);">No active avatar</span>
+                        </div>
+                        <div class="avatar-preview-container" id="avatar-active-preview" style="display: none;">
+                            <img id="avatar-preview" class="avatar-thumbnail" src="" alt="Avatar Preview">
+                            <div style="min-width: 0;">
+                                <h4 style="font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" id="avatar-filename">Active</h4>
+                                <span style="font-size: 12px; color: var(--primary);">Facial landmarks loaded</span>
+                            </div>
                         </div>
                     </div>
                 </div>
             </div>
 
-            <!-- Card 2: Interactive Controls -->
-            <div class="card">
-                <div class="card-title">2. Text-to-Speech Control</div>
-                <div class="form-group">
-                    <label for="emotion-select">Emotion Setting</label>
-                    <select id="emotion-select">
-                        <option value="S2E">Speech-to-Emotion (S2E - Auto-detect)</option>
-                        <option value="neutral" selected>Neutral</option>
-                        <option value="happy">Happy</option>
-                        <option value="angry">Angry</option>
-                        <option value="sad">Sad</option>
-                        <option value="surprise">Surprise</option>
-                    </select>
+            <!-- Card 2: Interactive Chat Panel -->
+            <div class="card" style="flex: 1; display: flex; flex-direction: column; gap: 16px;">
+                <div class="card-title">2. Conversation Chat</div>
+                
+                <!-- Chat Bubbles History (Feature 3) -->
+                <div id="chat-messages">
+                    <div class="chat-bubble bot">
+                        <div class="bubble-sender">Avatar</div>
+                        <div class="bubble-text">Hello! I am ready. Please upload my portrait image above and type something below to start chatting!</div>
+                    </div>
                 </div>
-                <div class="form-group">
-                    <label for="text-input">Speech Content (English)</label>
-                    <input type="text" id="text-input" placeholder="Type a message for the avatar to say..." value="Hello! This is a real-time talking head streaming demo using FLOAT and TensorRT.">
+
+                <!-- Suggested Quick Prompts -->
+                <div class="quick-prompts">
+                    <button class="quick-prompt-btn" onclick="sendQuickPrompt('Hello! How are you doing today?')">"Hello! How are you?"</button>
+                    <button class="quick-prompt-btn" onclick="sendQuickPrompt('Tell me about your TensorRT implementation.')">"Tell me about TensorRT"</button>
+                    <button class="quick-prompt-btn" onclick="sendQuickPrompt('Let\'s test the interrupt feature by submitting another prompt right away!')">"Test immediate interrupt"</button>
                 </div>
-                <button id="submit-btn" class="btn" disabled>
-                    <span>Synthesize & Speak</span>
-                </button>
+
+                <!-- Text Area Input & Emotion Select -->
+                <div style="display: flex; flex-direction: column; gap: 12px;">
+                    <div class="form-row" style="grid-template-columns: 1.2fr 1fr; gap: 12px;">
+                        <div class="form-group">
+                            <select id="emotion-select">
+                                <option value="S2E">Speech-to-Emotion (S2E - Auto)</option>
+                                <option value="neutral" selected>Neutral</option>
+                                <option value="happy">Happy</option>
+                                <option value="angry">Angry</option>
+                                <option value="sad">Sad</option>
+                                <option value="surprise">Surprise</option>
+                            </select>
+                        </div>
+                        <button id="chat-send-btn" class="btn" style="height: 38px; font-size:14px;" disabled>
+                            <span>Send Prompt</span>
+                        </button>
+                    </div>
+                    <textarea id="chat-input" placeholder="Type a message for the avatar to say... (Press Enter to send, Shift+Enter for new line)" rows="2" style="font-size:14px;"></textarea>
+                </div>
             </div>
         </div>
 
@@ -479,7 +618,7 @@
             <div class="card">
                 <div class="card-title">
                     <span>3. Live Output</span>
-                    <span id="playback-state" style="font-size: 13px; font-family: 'Space Mono', monospace; color: var(--primary);">IDLE</span>
+                    <span id="playback-state" style="font-size: 12px; font-family: 'Space Mono', monospace; color: var(--primary);">IDLE</span>
                 </div>
                 <div class="player-container">
                     <canvas id="video-canvas" width="512" height="512"></canvas>
@@ -490,22 +629,50 @@
                 </div>
             </div>
 
-            <!-- Card 4: Metrics -->
+            <!-- Card 4: Playback Monitor -->
             <div class="card">
-                <div class="card-title">Performance Monitor</div>
-                <div class="metric-grid">
+                <div class="card-title">4. Realtime Monitor</div>
+                
+                <!-- Playback progress card (Feature 2) -->
+                <div id="active-speech-card" class="active-speech-card" style="display: none;">
+                    <div class="metric-label" style="color: var(--accent);">Active Speaking Segment</div>
+                    <div id="speech-text-display" class="speech-text-display">"Loading speech text..."</div>
+                    <div style="display: flex; justify-content: space-between; font-size: 12px; color: var(--text-muted); font-family: 'Space Mono', monospace; margin-top: 4px;">
+                        <span id="chunk-progress-text">Playing segment 1 of 1</span>
+                    </div>
+                    <div class="buffer-health-container" style="background: rgba(255,0,127,0.1); height: 5px; margin-top: 6px;">
+                        <div id="chunk-progress-bar" class="buffer-health-bar" style="background: var(--accent); width: 0%;"></div>
+                    </div>
+                </div>
+
+                <div class="metric-grid" style="grid-template-columns: repeat(3, 1fr);">
                     <div class="metric-card">
-                        <div class="metric-label">Jitter Buffer Size</div>
+                        <div class="metric-label">Jitter Buffer</div>
                         <div class="metric-value" id="buf-size-val">0 / 250</div>
                         <div class="buffer-health-container">
                             <div id="buf-health-bar" class="buffer-health-bar"></div>
                         </div>
                     </div>
                     <div class="metric-card">
-                        <div class="metric-label">Average FPS</div>
+                        <div class="metric-label">TTS Latency</div>
+                        <div class="metric-value" id="tts-time-val">0 ms</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-label">Avg FPS</div>
                         <div class="metric-value" id="fps-val">0.0</div>
                     </div>
                 </div>
+                <div class="metric-grid" style="grid-template-columns: repeat(2, 1fr); margin-top: 10px;">
+                    <div class="metric-card">
+                        <div class="metric-label">Chunk GPU Inf</div>
+                        <div class="metric-value" id="inf-time-val">0 ms</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-label">Inference Mean (Acc)</div>
+                        <div class="metric-value" id="mean-inf-val">0 ms</div>
+                    </div>
+                </div>
+                
                 <div class="form-group">
                     <label>Inference Log</label>
                     <div id="log-area">Initializing client terminal...</div>
@@ -517,12 +684,16 @@
     <script>
         const dropZone = document.getElementById('drop-zone');
         const fileInput = document.getElementById('file-input');
-        const submitBtn = document.getElementById('submit-btn');
-        const textInput = document.getElementById('text-input');
+        const chatSendBtn = document.getElementById('chat-send-btn');
+        const chatInput = document.getElementById('chat-input');
         const emotionSelect = document.getElementById('emotion-select');
-        const avatarDetails = document.getElementById('avatar-details');
+        const chatMessages = document.getElementById('chat-messages');
+        
+        const avatarEmptyPreview = document.getElementById('avatar-empty-preview');
+        const avatarActivePreview = document.getElementById('avatar-active-preview');
         const avatarPreview = document.getElementById('avatar-preview');
         const avatarFilename = document.getElementById('avatar-filename');
+        
         const canvas = document.getElementById('video-canvas');
         const ctx = canvas.getContext('2d');
         const placeholder = document.getElementById('player-placeholder');
@@ -536,6 +707,17 @@
         const avatarStatusDot = document.getElementById('avatar-status-dot');
         const avatarStatusText = document.getElementById('avatar-status-text');
         const playbackStateText = document.getElementById('playback-state');
+        
+        // Active progress card elements
+        const activeSpeechCard = document.getElementById('active-speech-card');
+        const speechTextDisplay = document.getElementById('speech-text-display');
+        const chunkProgressText = document.getElementById('chunk-progress-text');
+        
+        // Timing Stats Elements
+        const ttsTimeVal = document.getElementById('tts-time-val');
+        const infTimeVal = document.getElementById('inf-time-val');
+        const meanInfVal = document.getElementById('mean-inf-val');
+        const chunkProgressBar = document.getElementById('chunk-progress-bar');
         
         // Metrics
         const bufSizeVal = document.getElementById('buf-size-val');
@@ -552,6 +734,7 @@
         // Web Audio API
         let audioCtx = null;
         let nextAudioStartTime = 0;
+        let activeSources = []; // Tracks active audio sources for interrupt capability
         
         // FPS Monitoring
         let frameCount = 0;
@@ -582,7 +765,8 @@
         function connectWebSocket() {
             const loc = window.location;
             const wsProtocol = loc.protocol === "https:" ? "wss:" : "ws:";
-            const wsUrl = `${wsProtocol}//${loc.host}/stream`;
+            // Explicitly connect to uvicorn port 4747
+            const wsUrl = `${wsProtocol}//${loc.hostname}:4747/stream`;
             
             log(`Connecting to stream WebSocket at: ${wsUrl}...`);
             ws = new WebSocket(wsUrl);
@@ -606,18 +790,49 @@
             };
 
             ws.onerror = (err) => {
-                log("WebSocket encounterd error.", "error");
+                log("WebSocket encountered error.", "error");
                 wsStatusDot.className = "status-dot";
             };
 
             ws.onmessage = (event) => {
                 const data = JSON.parse(event.data);
+                
+                // FEATURE 1: Control interrupt handling
+                if (data.type === "control" && data.action === "interrupt") {
+                    log("Interrupt signal received! Flushing queue and starting new speech.", "warn");
+                    
+                    // Clear client playback queue
+                    frameQueue = [];
+                    
+                    // Stop all scheduled/playing audio buffer sources
+                    activeSources.forEach(src => {
+                        try {
+                            src.stop();
+                        } catch (err) {}
+                    });
+                    activeSources = [];
+                    
+                    // Reset audio timeline
+                    nextAudioStartTime = 0;
+                    
+                    // UI indicators update
+                    playbackStateText.innerText = "INTERRUPTED";
+                    playbackStateText.style.color = "#ff007f";
+                    activeSpeechCard.style.display = 'none';
+                    
+                    // Remove highlight state from chat bubbles
+                    document.querySelectorAll('.chat-bubble').forEach(b => b.classList.remove('active-playing'));
+                    return;
+                }
+                
                 if (data.image && data.audio) {
                     frameQueue.push(data);
                     
-                    // Jitter Buffer: wait for at least 15 frames (~600ms) before starting playback to absorb network jitter
-                    if (frameQueue.length >= 15 && !isPlaying) {
-                        log("Jitter buffer filled, starting playback loop...");
+                    // FEATURE 1: Lower jitter threshold for active speech to play almost instantly
+                    const isIdle = data.text_id === "idle";
+                    const bufferThreshold = isIdle ? 5 : 2; // 2 frames = 80ms latency for active speech
+                    
+                    if (frameQueue.length >= bufferThreshold && !isPlaying) {
                         startPlayback();
                     }
                 }
@@ -627,7 +842,6 @@
         function playAudioChunk(samples) {
             if (!audioCtx) return;
             
-            // samples is an array of floats
             const buffer = audioCtx.createBuffer(1, samples.length, 16000);
             buffer.copyToChannel(new Float32Array(samples), 0);
             
@@ -640,6 +854,15 @@
             const startTime = Math.max(now, nextAudioStartTime);
             source.start(startTime);
             nextAudioStartTime = startTime + buffer.duration;
+            
+            // Register source for interrupt capability
+            activeSources.push(source);
+            source.onended = () => {
+                const idx = activeSources.indexOf(source);
+                if (idx > -1) {
+                    activeSources.splice(idx, 1);
+                }
+            };
         }
 
         function startPlayback() {
@@ -662,13 +885,7 @@
                     // 2. Play corresponding audio samples
                     playAudioChunk(chunk.audio);
                     
-                    // Update playback state indicator
-                    // If audio has sound (amplitude > 0.01), show ACTIVE, else show IDLE
-                    const isSilent = chunk.audio.every(x => Math.abs(x) < 0.001);
-                    playbackStateText.innerText = isSilent ? "IDLE / BREATHING" : "TALKING";
-                    playbackStateText.style.color = isSilent ? "#00ffcc" : "#ff007f";
-                    
-                    // Monitor FPS
+                    // 3. Monitor FPS
                     frameCount++;
                     const now = Date.now();
                     if (now - lastFpsUpdate >= 1000) {
@@ -677,14 +894,12 @@
                         frameCount = 0;
                         lastFpsUpdate = now;
                     }
+                    
+                    // 4. Update playback metrics and progress card (Feature 2)
+                    updatePlaybackProgress(chunk);
+                } else {
+                    stopPlayback();
                 }
-                
-                // Monitor Buffer size
-                const size = frameQueue.length;
-                bufSizeVal.innerText = `${size} / 250`;
-                const percent = Math.min((size / 250) * 100, 100);
-                bufHealthBar.style.width = `${percent}%`;
-                
             }, 40); // 40ms = 25 FPS
         }
 
@@ -694,22 +909,75 @@
             if (playbackInterval) {
                 clearInterval(playbackInterval);
             }
-            playbackStateText.innerText = "STOPPED";
-            playbackStateText.style.color = "#ef4444";
+            const wsConnected = ws && ws.readyState === WebSocket.OPEN;
+            playbackStateText.innerText = wsConnected ? "BUFFERING" : "DISCONNECTED";
+            playbackStateText.style.color = wsConnected ? "#f59e0b" : "#ef4444";
             placeholder.style.display = 'flex';
             placeholder.style.opacity = 1;
         }
 
+        function updatePlaybackProgress(chunk) {
+            // Buffer size updates
+            const size = frameQueue.length;
+            bufSizeVal.innerText = `${size} / 250`;
+            const percent = Math.min((size / 250) * 100, 100);
+            bufHealthBar.style.width = `${percent}%`;
+            
+            // Update timing stats
+            if (chunk.inf_time_ms !== undefined) {
+                infTimeVal.innerText = `${chunk.inf_time_ms} ms`;
+            }
+            if (chunk.mean_inf_ms !== undefined) {
+                meanInfVal.innerText = `${chunk.mean_inf_ms} ms`;
+            }
+            
+            if (chunk.text_id === "idle") {
+                playbackStateText.innerText = "IDLE / BREATHING";
+                playbackStateText.style.color = "#00ffcc";
+                activeSpeechCard.style.display = 'none';
+                
+                // Remove bubble highlight when idle
+                document.querySelectorAll('.chat-bubble').forEach(b => b.classList.remove('active-playing'));
+            } else {
+                playbackStateText.innerText = "TALKING";
+                playbackStateText.style.color = "#ff007f";
+                
+                // Display progress card (Feature 2)
+                activeSpeechCard.style.display = 'flex';
+                speechTextDisplay.innerText = `"${chunk.text}"`;
+                
+                const chunkNum = chunk.chunk_idx + 1;
+                const totalChunks = chunk.total_chunks;
+                chunkProgressText.innerText = `Segment ${chunkNum} of ${totalChunks} playing...`;
+                
+                const progressPercent = (chunkNum / totalChunks) * 100;
+                chunkProgressBar.style.width = `${progressPercent}%`;
+                
+                // Highlight the active playing chat bubble (Feature 2 & 3)
+                highlightChatBubble(chunk.text_id);
+            }
+        }
+
+        function highlightChatBubble(textId) {
+            const bubbles = document.querySelectorAll('.chat-bubble');
+            bubbles.forEach(b => b.classList.remove('active-playing'));
+            
+            const activeBubble = document.getElementById(`bubble-${textId}`);
+            if (activeBubble) {
+                activeBubble.classList.add('active-playing');
+            }
+        }
+
         function updateUIState() {
             const ready = ws && ws.readyState === WebSocket.OPEN && isAvatarLoaded;
-            submitBtn.disabled = !ready;
+            chatSendBtn.disabled = !ready;
             
             if (!isAvatarLoaded) {
-                placeholderText.innerText = "Upload avatar to initialize visual model";
+                placeholderText.innerText = "Upload avatar portrait above to initialize structural model";
             } else if (!ws || ws.readyState !== WebSocket.OPEN) {
-                placeholderText.innerText = "Connecting to streaming server...";
+                placeholderText.innerText = "Connecting to real-time streaming server...";
             } else {
-                placeholderText.innerText = "Ready. Submit a prompt to start conversation!";
+                placeholderText.innerText = "Connection active. Send a message to start conversation!";
             }
         }
 
@@ -762,7 +1030,8 @@
                     avatarStatusText.innerText = "Loaded";
                     
                     // Show Thumbnail Preview
-                    avatarDetails.style.display = 'block';
+                    avatarEmptyPreview.style.display = 'none';
+                    avatarActivePreview.style.display = 'flex';
                     avatarFilename.innerText = file.name;
                     
                     const reader = new FileReader();
@@ -788,15 +1057,20 @@
             }
         }
 
-        // Submit Text TTS Button
-        submitBtn.addEventListener('click', async () => {
+        // Feature 3: Send chat prompt function
+        async function sendChatMessage() {
             initAudio();
-            const text = textInput.value.trim();
+            const text = chatInput.value.trim();
             const emotion = emotionSelect.value;
             if (!text) return;
             
-            submitBtn.disabled = true;
-            log(`Submitting text: "${text}" with emotion: "${emotion}"...`);
+            chatInput.value = '';
+            
+            // Append user message bubble
+            appendBubble('user', 'You', text);
+            
+            chatSendBtn.disabled = true;
+            log(`Submitting prompt text: "${text}"...`);
             
             try {
                 const response = await fetch('/submit_text', {
@@ -807,14 +1081,51 @@
                 
                 const result = await response.json();
                 if (response.ok) {
-                    log(`Generated ${result.duration_sec.toFixed(2)}s of TTS speech features in queue.`);
+                    log(`TTS speech generated (ID: ${result.text_id}, Duration: ${result.duration_sec.toFixed(2)}s).`);
+                    if (result.tts_time_ms !== undefined) {
+                        ttsTimeVal.innerText = `${result.tts_time_ms} ms`;
+                    }
+                    // Append bot reply bubble representing speech text
+                    appendBubble('bot', 'Avatar', text, result.text_id);
                 } else {
                     log(`Speech generation failed: ${result.detail || 'Unknown error'}`, 'error');
                 }
             } catch (err) {
                 log(`Network error sending speech text: ${err.message}`, 'error');
             } finally {
-                submitBtn.disabled = false;
+                chatSendBtn.disabled = false;
+                updateUIState();
+            }
+        }
+
+        function appendBubble(type, sender, text, textId = null) {
+            const bubble = document.createElement('div');
+            bubble.className = `chat-bubble ${type}`;
+            if (textId) {
+                bubble.id = `bubble-${textId}`;
+            }
+            
+            bubble.innerHTML = `
+                <div class="bubble-sender">${sender}</div>
+                <div class="bubble-text">${text}</div>
+            `;
+            
+            chatMessages.appendChild(bubble);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        // Quick prompts loader helper
+        window.sendQuickPrompt = function(text) {
+            chatInput.value = text;
+            sendChatMessage();
+        };
+
+        // Event listeners for text input
+        chatSendBtn.addEventListener('click', sendChatMessage);
+        chatInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendChatMessage();
             }
         });
 

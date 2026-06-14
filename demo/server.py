@@ -59,6 +59,7 @@ pending_audio_queue = queue.Queue()
 pipeline = None
 avatar_data = None
 active_connections = set()
+active_texts = {}
 
 # Setup templates
 templates = Jinja2Templates(directory="demo/templates")
@@ -114,6 +115,7 @@ def producer_thread_func():
         print("[Producer] PyCUDA context successfully bound.")
         
     hidden_states = None
+    inference_times = []
     
     # Pre-cache idle features (silence) to avoid calling wav2vec repeatedly when idle
     idle_samples = np.random.normal(0, 1e-4, 32000).astype(np.float32)
@@ -125,7 +127,7 @@ def producer_thread_func():
     while True:
         # 1. Throttling: check if any clients are connected
         if len(active_connections) == 0:
-            time.sleep(0.1)
+            time.sleep(0.01)  # Checked more frequently (10ms)
             continue
             
         # 2. Wait for avatar image to be initialized
@@ -136,6 +138,12 @@ def producer_thread_func():
         # 3. Choose between active TTS audio vs. idle breathing
         is_active = not pending_audio_queue.empty()
         
+        text_id = "idle"
+        chunk_idx = 0
+        total_chunks = 1
+        
+        start_inf = time.time()  # Start timing inference step (FMT + TRT Decoder)
+        
         if is_active:
             try:
                 # Pop next active speech chunk
@@ -144,6 +152,9 @@ def producer_thread_func():
                 audio_samples = chunk['raw_audio_samples']
                 raw_a = chunk['raw_audio_tensor'].to(pipeline.opt.rank)
                 emotion = chunk.get('emotion', 'neutral')
+                text_id = chunk.get('text_id', 'speech')
+                chunk_idx = chunk.get('chunk_idx', 0)
+                total_chunks = chunk.get('total_chunks', 1)
                 
                 # Make sure hidden states has raw audio tensor (used for Ser emotion prediction)
                 if hidden_states is None:
@@ -177,10 +188,21 @@ def producer_thread_func():
                     emo='neutral'
                 )
                 audio_samples = idle_samples
+                text_id = "idle"
+                chunk_idx = 0
+                total_chunks = 1
             except Exception as e:
                 print(f"[Producer Error] Idle step failed: {e}")
                 time.sleep(1.0)
                 continue
+                
+        inf_time = time.time() - start_inf  # Stop timing inference step
+        
+        # Accumulate rolling average of inference times (e.g. last 50 chunks)
+        inference_times.append(inf_time)
+        if len(inference_times) > 50:
+            inference_times.pop(0)
+        mean_inf = sum(inference_times) / len(inference_times)
                 
         # 4. Convert frames to uint8 RGB numpy array [50, 512, 512, 3]
         vid = stream_output(frames)
@@ -194,12 +216,12 @@ def producer_thread_func():
             # Encode frame to Base64 in background thread to keep WebSocket thread lightweight
             base64_frame = encode_frame_to_base64(frame_rgb)
             
-            frame_buffer.put((base64_frame, audio_slice))
+            frame_buffer.put((base64_frame, audio_slice, text_id, chunk_idx, total_chunks, inf_time, mean_inf))
             
         # Throttling: If the consumer is running slow and buffer starts piling up,
         # pause the producer thread temporarily to prevent GPU compute waste
         while len(frame_buffer) > 150:
-            time.sleep(0.05)
+            time.sleep(0.005)  # Respond faster to buffer consumption (5ms)
 
 # Pydantic models
 class TextRequest(BaseModel):
@@ -270,10 +292,33 @@ async def submit_text(req: TextRequest):
     try:
         loop = asyncio.get_event_loop()
         
-        # 1. Run TTS in executor
-        samples = await loop.run_in_executor(None, text_to_speech_samples, req.text)
+        # 1. Assign unique text_id and map text content
+        text_id = f"txt_{int(time.time() * 1000)}"
+        active_texts[text_id] = req.text
         
-        # 2. Pad samples to match 2-second chunks (32000 samples)
+        # 2. FEATURE 1: Interrupt currently playing frames/audio immediately
+        print(f"[Server] Interrupting current playbacks for prompt: '{req.text}'")
+        # Clear queues
+        frame_buffer.clear()
+        while not pending_audio_queue.empty():
+            try:
+                pending_audio_queue.get_nowait()
+            except queue.Empty:
+                break
+                
+        # Send WebSocket control message to all active clients to tell them to flush immediately
+        for ws in list(active_connections):
+            try:
+                await ws.send_json({"type": "control", "action": "interrupt"})
+            except Exception as e:
+                print(f"[WebSocket Error] Failed to send interrupt: {e}")
+        
+        # 3. Run TTS in executor (Measure timing here)
+        start_tts = time.time()
+        samples = await loop.run_in_executor(None, text_to_speech_samples, req.text)
+        tts_time = time.time() - start_tts
+        
+        # 4. Pad samples to match 2-second chunks (32000 samples)
         chunk_size = 32000
         num_samples = len(samples)
         if num_samples % chunk_size != 0:
@@ -283,27 +328,37 @@ async def submit_text(req: TextRequest):
         duration_sec = len(samples) / 16000.0
         print(f"[Server] Synthesized speech duration: {duration_sec:.2f} seconds. Segmenting chunks...")
         
-        # 3. Extract features block-by-block (running wav2vec2 encoder in executor)
+        # 5. Extract features block-by-block (running wav2vec2 encoder in executor)
         def segment_and_extract(audio_samples):
             chunks = []
-            for i in range(0, len(audio_samples), chunk_size):
-                chunk_samples = audio_samples[i : i + chunk_size]
+            num_chunks = len(audio_samples) // chunk_size
+            for idx in range(num_chunks):
+                chunk_samples = audio_samples[idx * chunk_size : (idx + 1) * chunk_size]
                 processed = pipeline.process_audio_chunk(chunk_samples)
                 chunks.append({
                     'audio_features': processed['audio_features'].cpu(),
                     'raw_audio_samples': chunk_samples,
                     'raw_audio_tensor': processed['raw_audio_tensor'].cpu(),
-                    'emotion': req.emotion
+                    'emotion': req.emotion,
+                    'text_id': text_id,
+                    'chunk_idx': idx,
+                    'total_chunks': num_chunks
                 })
             return chunks
             
         chunks = await loop.run_in_executor(None, segment_and_extract, samples)
         
-        # 4. Queue chunks to pending input
+        # 6. Queue chunks to pending input
         for chunk in chunks:
             pending_audio_queue.put(chunk)
             
-        return {"status": "success", "duration_sec": duration_sec, "chunks": len(chunks)}
+        return {
+            "status": "success", 
+            "text_id": text_id, 
+            "duration_sec": duration_sec, 
+            "chunks": len(chunks),
+            "tts_time_ms": int(tts_time * 1000)
+        }
     except Exception as e:
         print(f"[Server Error] submit_text failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -325,15 +380,21 @@ async def stream_websocket(websocket: WebSocket):
             item = frame_buffer.get()
             
             if item is not None:
-                base64_frame, audio_slice = item
+                base64_frame, audio_slice, text_id, chunk_idx, total_chunks, inf_time, mean_inf = item
                 # Send frame JPEG + audio floats to client
                 await websocket.send_json({
                     "image": base64_frame,
-                    "audio": audio_slice.tolist() if isinstance(audio_slice, np.ndarray) else audio_slice
+                    "audio": audio_slice.tolist() if isinstance(audio_slice, np.ndarray) else audio_slice,
+                    "text_id": text_id,
+                    "text": active_texts.get(text_id, ""),
+                    "chunk_idx": chunk_idx,
+                    "total_chunks": total_chunks,
+                    "inf_time_ms": int(inf_time * 1000),
+                    "mean_inf_ms": int(mean_inf * 1000)
                 })
             else:
-                # Buffer empty (e.g. initial buffering), pause briefly
-                await asyncio.sleep(0.005)
+                # Buffer empty (e.g. initial buffering), pause briefly (1ms)
+                await asyncio.sleep(0.001)
                 continue
                 
             # Sleep to maintain 25 FPS

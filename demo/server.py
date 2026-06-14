@@ -50,7 +50,7 @@ class FrameBuffer:
         with self.lock:
             return len(self.queue)
 
-frame_buffer = FrameBuffer(maxsize=250)
+frame_buffer = FrameBuffer(maxsize=5)  # Max 5 chunks (10 seconds)
 
 # Thread-safe queue for pending TTS audio chunks
 pending_audio_queue = queue.Queue()
@@ -60,6 +60,7 @@ pipeline = None
 avatar_data = None
 active_connections = set()
 active_texts = {}
+is_preparing_speech = False
 
 # Setup templates
 templates = Jinja2Templates(directory="demo/templates")
@@ -138,6 +139,11 @@ def producer_thread_func():
         # 3. Choose between active TTS audio vs. idle breathing
         is_active = not pending_audio_queue.empty()
         
+        # If we are preparing a speech segment, wait until it is queued rather than generating new idle chunks
+        if is_preparing_speech and not is_active:
+            time.sleep(0.01)
+            continue
+            
         text_id = "idle"
         chunk_idx = 0
         total_chunks = 1
@@ -185,7 +191,8 @@ def producer_thread_func():
                     audio_features=idle_wa,
                     hidden_states=hidden_states,
                     avatar_data=avatar_data,
-                    emo='neutral'
+                    # emo='neutral'
+                    emo='happy'
                 )
                 audio_samples = idle_samples
                 text_id = "idle"
@@ -207,20 +214,19 @@ def producer_thread_func():
         # 4. Convert frames to uint8 RGB numpy array [50, 512, 512, 3]
         vid = stream_output(frames)
         
-        # 5. Pack each frame with its corresponding audio slice (640 samples per frame)
-        # and append to the bounded frame buffer
+        # 5. Pack the entire chunk into a list of JPEGs and push once
+        base64_frames = []
         for i in range(50):
-            frame_rgb = vid[i]
-            audio_slice = audio_samples[i * 640 : (i + 1) * 640]
+            base64_frames.append(encode_frame_to_base64(vid[i]))
             
-            # Encode frame to Base64 in background thread to keep WebSocket thread lightweight
-            base64_frame = encode_frame_to_base64(frame_rgb)
-            
-            frame_buffer.put((base64_frame, audio_slice, text_id, chunk_idx, total_chunks, inf_time, mean_inf))
+        print(f"[Producer] Produced chunk for text_id={text_id} (chunk_idx={chunk_idx}/{total_chunks}) - inf_time={inf_time*1000:.1f}ms")
+        frame_buffer.put((base64_frames, audio_samples, text_id, chunk_idx, total_chunks, inf_time, mean_inf))
             
         # Throttling: If the consumer is running slow and buffer starts piling up,
         # pause the producer thread temporarily to prevent GPU compute waste
-        while len(frame_buffer) > 150:
+        if len(frame_buffer) > 3:
+            print(f"[Producer] Throttling active: frame_buffer size is {len(frame_buffer)}. Pausing...")
+        while len(frame_buffer) > 3:  # Hold at most 3 chunks (6 seconds)
             time.sleep(0.005)  # Respond faster to buffer consumption (5ms)
 
 # Pydantic models
@@ -286,19 +292,19 @@ async def init_avatar(file: UploadFile = File(...)):
 @app.post("/submit_text")
 async def submit_text(req: TextRequest):
     """Processes incoming text input, runs TTS, and queues audio features for the producer loop."""
+    global is_preparing_speech
     if avatar_data is None:
         raise HTTPException(status_code=400, detail="Avatar not initialized. Please upload a portrait first.")
         
     try:
+        is_preparing_speech = True
         loop = asyncio.get_event_loop()
         
         # 1. Assign unique text_id and map text content
         text_id = f"txt_{int(time.time() * 1000)}"
         active_texts[text_id] = req.text
         
-        # 2. FEATURE 1: Interrupt currently playing frames/audio immediately
-        print(f"[Server] Interrupting current playbacks for prompt: '{req.text}'")
-        # Clear queues
+        # Clear frame buffer (discard unplayed idle chunks) and pending audio queue
         frame_buffer.clear()
         while not pending_audio_queue.empty():
             try:
@@ -306,12 +312,12 @@ async def submit_text(req: TextRequest):
             except queue.Empty:
                 break
                 
-        # Send WebSocket control message to all active clients to tell them to flush immediately
+        # Send WebSocket control message to all active clients to filter out unplayed idle chunks
         for ws in list(active_connections):
             try:
-                await ws.send_json({"type": "control", "action": "interrupt"})
+                await ws.send_json({"type": "control", "action": "prepare_speech"})
             except Exception as e:
-                print(f"[WebSocket Error] Failed to send interrupt: {e}")
+                print(f"[WebSocket Error] Failed to send prepare_speech: {e}")
         
         # 3. Run TTS in executor (Measure timing here)
         start_tts = time.time()
@@ -362,6 +368,8 @@ async def submit_text(req: TextRequest):
     except Exception as e:
         print(f"[Server Error] submit_text failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        is_preparing_speech = False
 
 @app.websocket("/stream")
 async def stream_websocket(websocket: WebSocket):
@@ -380,10 +388,11 @@ async def stream_websocket(websocket: WebSocket):
             item = frame_buffer.get()
             
             if item is not None:
-                base64_frame, audio_slice, text_id, chunk_idx, total_chunks, inf_time, mean_inf = item
-                # Send frame JPEG + audio floats to client
+                base64_frames, audio_slice, text_id, chunk_idx, total_chunks, inf_time, mean_inf = item
+                print(f"[WebSocket] Sending chunk for text_id={text_id} (chunk_idx={chunk_idx}/{total_chunks}) - buffer size remaining: {len(frame_buffer)}")
+                # Send frame JPEGs + audio floats as a single chunk payload to client
                 await websocket.send_json({
-                    "image": base64_frame,
+                    "images": base64_frames,
                     "audio": audio_slice.tolist() if isinstance(audio_slice, np.ndarray) else audio_slice,
                     "text_id": text_id,
                     "text": active_texts.get(text_id, ""),
@@ -392,15 +401,15 @@ async def stream_websocket(websocket: WebSocket):
                     "inf_time_ms": int(inf_time * 1000),
                     "mean_inf_ms": int(mean_inf * 1000)
                 })
-            else:
-                # Buffer empty (e.g. initial buffering), pause briefly (1ms)
-                await asyncio.sleep(0.001)
-                continue
                 
-            # Sleep to maintain 25 FPS
-            elapsed = time.time() - start_time
-            sleep_time = max(0, frame_interval - elapsed)
-            await asyncio.sleep(sleep_time)
+                # Sleep to maintain a steady 2.0 seconds interval per chunk
+                elapsed = time.time() - start_time
+                sleep_time = max(0, 2.0 - elapsed)
+                await asyncio.sleep(sleep_time)
+            else:
+                # Buffer empty (e.g. initial buffering), pause briefly (10ms)
+                await asyncio.sleep(0.010)
+                continue
             
     except WebSocketDisconnect:
         print("[WebSocket] Client disconnected.")

@@ -53,6 +53,8 @@ class StudentFLOATWithTRTDecoder(StudentFLOAT):
         self.trt_dec_inferencer = TRTInferencer(trt_decoder_path)
         self.trt_dec_stream = torch.cuda.Stream()
         self.warmup_trt_decoder()
+        if self.context is not None:
+            self.context.pop()
 
     @torch.no_grad()
     def warmup_trt_decoder(self):

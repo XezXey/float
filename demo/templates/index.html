@@ -726,10 +726,14 @@
 
         // Streaming states
         let ws = null;
-        let frameQueue = [];
-        let isPlaying = false;
-        let playbackInterval = null;
+        let chunkQueue = [];
+        let isPlayingChunk = false;
         let isAvatarLoaded = false;
+        
+        // Active timeouts / intervals for frames
+        let frameRenderInterval = null;
+        let frameRenderTimeout = null;
+        let chunkTransitionTimeout = null;
         
         // Web Audio API
         let audioCtx = null;
@@ -798,129 +802,193 @@
                 const data = JSON.parse(event.data);
                 
                 // FEATURE 1: Control interrupt handling
-                if (data.type === "control" && data.action === "interrupt") {
-                    log("Interrupt signal received! Flushing queue and starting new speech.", "warn");
-                    
-                    // Clear client playback queue
-                    frameQueue = [];
-                    
-                    // Stop all scheduled/playing audio buffer sources
-                    activeSources.forEach(src => {
-                        try {
-                            src.stop();
-                        } catch (err) {}
-                    });
-                    activeSources = [];
-                    
-                    // Reset audio timeline
-                    nextAudioStartTime = 0;
-                    
-                    // UI indicators update
-                    playbackStateText.innerText = "INTERRUPTED";
-                    playbackStateText.style.color = "#ff007f";
-                    activeSpeechCard.style.display = 'none';
-                    
-                    // Remove highlight state from chat bubbles
-                    document.querySelectorAll('.chat-bubble').forEach(b => b.classList.remove('active-playing'));
+                if (data.type === "control") {
+                    if (data.action === "interrupt") {
+                        log("Interrupt signal received! Flushing queue and starting new speech.", "warn");
+                        
+                        // Clear client playback queue
+                        chunkQueue = [];
+                        
+                        // Stop all scheduled/playing audio buffer sources
+                        activeSources.forEach(src => {
+                            try {
+                                src.stop();
+                            } catch (err) {}
+                        });
+                        activeSources = [];
+                        
+                        // Reset audio timeline
+                        nextAudioStartTime = 0;
+                        isPlayingChunk = false;
+                        
+                        // Clear active intervals
+                        if (frameRenderInterval) clearInterval(frameRenderInterval);
+                        if (frameRenderTimeout) clearTimeout(frameRenderTimeout);
+                        if (chunkTransitionTimeout) clearTimeout(chunkTransitionTimeout);
+                        
+                        // UI indicators update
+                        playbackStateText.innerText = "INTERRUPTED";
+                        playbackStateText.style.color = "#ff007f";
+                        activeSpeechCard.style.display = 'none';
+                        
+                        // Remove highlight state from chat bubbles
+                        document.querySelectorAll('.chat-bubble').forEach(b => b.classList.remove('active-playing'));
+                    } else if (data.action === "prepare_speech") {
+                        log("New prompt submitted. Removing unplayed idle chunks for smooth transition...", "info");
+                        chunkQueue = chunkQueue.filter(chunk => chunk.text_id !== "idle");
+                    }
                     return;
                 }
                 
-                if (data.image && data.audio) {
-                    frameQueue.push(data);
-                    
-                    // FEATURE 1: Lower jitter threshold for active speech to play almost instantly
-                    const isIdle = data.text_id === "idle";
-                    const bufferThreshold = isIdle ? 5 : 2; // 2 frames = 80ms latency for active speech
-                    
-                    if (frameQueue.length >= bufferThreshold && !isPlaying) {
-                        startPlayback();
-                    }
+                if (data.images && data.audio) {
+                    chunkQueue.push(data);
+                    checkChunkQueue();
                 }
             };
-        }
-
-        function playAudioChunk(samples) {
-            if (!audioCtx) return;
-            
-            const buffer = audioCtx.createBuffer(1, samples.length, 16000);
-            buffer.copyToChannel(new Float32Array(samples), 0);
-            
-            const source = audioCtx.createBufferSource();
-            source.buffer = buffer;
-            source.connect(audioCtx.destination);
-            
-            // Audio timeline scheduling
-            const now = audioCtx.currentTime;
-            const startTime = Math.max(now, nextAudioStartTime);
-            source.start(startTime);
-            nextAudioStartTime = startTime + buffer.duration;
-            
-            // Register source for interrupt capability
-            activeSources.push(source);
-            source.onended = () => {
-                const idx = activeSources.indexOf(source);
-                if (idx > -1) {
-                    activeSources.splice(idx, 1);
-                }
-            };
-        }
-
-        function startPlayback() {
-            if (isPlaying) return;
-            isPlaying = true;
-            placeholder.style.opacity = 0;
-            setTimeout(() => { placeholder.style.display = 'none'; }, 500);
-            
-            playbackInterval = setInterval(() => {
-                if (frameQueue.length > 0) {
-                    const chunk = frameQueue.shift();
-                    
-                    // 1. Draw frame on canvas
-                    const img = new Image();
-                    img.onload = () => {
-                        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-                    };
-                    img.src = 'data:image/jpeg;base64,' + chunk.image;
-                    
-                    // 2. Play corresponding audio samples
-                    playAudioChunk(chunk.audio);
-                    
-                    // 3. Monitor FPS
-                    frameCount++;
-                    const now = Date.now();
-                    if (now - lastFpsUpdate >= 1000) {
-                        const fps = (frameCount / ((now - lastFpsUpdate) / 1000)).toFixed(1);
-                        fpsVal.innerText = fps;
-                        frameCount = 0;
-                        lastFpsUpdate = now;
-                    }
-                    
-                    // 4. Update playback metrics and progress card (Feature 2)
-                    updatePlaybackProgress(chunk);
-                } else {
-                    stopPlayback();
-                }
-            }, 40); // 40ms = 25 FPS
-        }
+        } // Close connectWebSocket
 
         function stopPlayback() {
-            if (!isPlaying) return;
-            isPlaying = false;
-            if (playbackInterval) {
-                clearInterval(playbackInterval);
-            }
+            isPlayingChunk = false;
+            if (frameRenderInterval) clearInterval(frameRenderInterval);
+            if (frameRenderTimeout) clearTimeout(frameRenderTimeout);
+            
             const wsConnected = ws && ws.readyState === WebSocket.OPEN;
             playbackStateText.innerText = wsConnected ? "BUFFERING" : "DISCONNECTED";
             playbackStateText.style.color = wsConnected ? "#f59e0b" : "#ef4444";
-            placeholder.style.display = 'flex';
-            placeholder.style.opacity = 1;
+            
+            if (!isAvatarLoaded || !wsConnected) {
+                placeholder.style.display = 'flex';
+                placeholder.style.opacity = 1;
+            } else {
+                placeholder.style.display = 'none';
+            }
+        }
+        
+        function checkChunkQueue() {
+            if (chunkQueue.length > 0 && !isPlayingChunk) {
+                const nextChunk = chunkQueue.shift();
+                playChunk(nextChunk);
+            } else if (chunkQueue.length === 0 && !isPlayingChunk) {
+                stopPlayback();
+            }
+        }
+        
+        function playChunk(chunk) {
+            // Clear any active transition or rendering intervals/timeouts immediately to prevent overlapping loops
+            if (chunkTransitionTimeout) {
+                clearTimeout(chunkTransitionTimeout);
+                chunkTransitionTimeout = null;
+            }
+            if (frameRenderInterval) {
+                clearInterval(frameRenderInterval);
+                frameRenderInterval = null;
+            }
+            if (frameRenderTimeout) {
+                clearTimeout(frameRenderTimeout);
+                frameRenderTimeout = null;
+            }
+
+            isPlayingChunk = true;
+            placeholder.style.opacity = 0;
+            setTimeout(() => { placeholder.style.display = 'none'; }, 200);
+            
+            // Ensure audio context is initialized
+            initAudio();
+            
+            let delayMs = 0;
+            
+            if (audioCtx) {
+                try {
+                    const samples = chunk.audio;
+                    const buffer = audioCtx.createBuffer(1, samples.length, 16000);
+                    buffer.copyToChannel(new Float32Array(samples), 0);
+                    
+                    const source = audioCtx.createBufferSource();
+                    source.buffer = buffer;
+                    source.connect(audioCtx.destination);
+                    
+                    const now = audioCtx.currentTime;
+                    
+                    // If audioCtx is suspended or nextAudioStartTime has accumulated a large lag, reset it
+                    if (audioCtx.state === 'suspended') {
+                        nextAudioStartTime = now;
+                    } else if (nextAudioStartTime - now > 0.5) {
+                        log(`Audio sync drift detected (${(nextAudioStartTime - now).toFixed(2)}s). Resetting audio timeline.`, "warn");
+                        nextAudioStartTime = now;
+                    } else if (now - nextAudioStartTime > 2.0) {
+                        nextAudioStartTime = now;
+                    }
+                    
+                    const startTime = Math.max(now, nextAudioStartTime);
+                    source.start(startTime);
+                    nextAudioStartTime = startTime + buffer.duration;
+                    
+                    activeSources.push(source);
+                    source.onended = () => {
+                        const idx = activeSources.indexOf(source);
+                        if (idx > -1) activeSources.splice(idx, 1);
+                    };
+                    
+                    delayMs = (startTime - now) * 1000;
+                } catch (e) {
+                    log(`Failed to play audio chunk: ${e.message}`, "error");
+                    delayMs = 0;
+                }
+            } else {
+                delayMs = 0;
+            }
+            
+            // Transition to the next chunk exactly 2 seconds later (matching 50 frames at 25 FPS)
+            chunkTransitionTimeout = setTimeout(() => {
+                isPlayingChunk = false;
+                checkChunkQueue();
+            }, 2000);
+            
+            // Play Video (Draw 50 frames in sync)
+            renderFrames(chunk, delayMs);
         }
 
-        function updatePlaybackProgress(chunk) {
-            // Buffer size updates
-            const size = frameQueue.length;
-            bufSizeVal.innerText = `${size} / 250`;
-            const percent = Math.min((size / 250) * 100, 100);
+        function renderFrames(chunk, delayMs) {
+            frameRenderTimeout = setTimeout(() => {
+                let frameIdx = 0;
+                // Capture the interval ID in a local closure so it cannot be cleared by another chunk
+                const activeInterval = setInterval(() => {
+                    if (frameIdx < chunk.images.length) {
+                        const img = new Image();
+                        img.onload = () => {
+                            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                        };
+                        img.src = 'data:image/jpeg;base64,' + chunk.images[frameIdx];
+                        
+                        // Monitor FPS
+                        frameCount++;
+                        const curTime = Date.now();
+                        if (curTime - lastFpsUpdate >= 1000) {
+                            const fps = (frameCount / ((curTime - lastFpsUpdate) / 1000)).toFixed(1);
+                            fpsVal.innerText = fps;
+                            frameCount = 0;
+                            lastFpsUpdate = curTime;
+                        }
+                        
+                        updatePlaybackProgress(chunk, frameIdx);
+                        frameIdx++;
+                    } else {
+                        clearInterval(activeInterval);
+                        if (frameRenderInterval === activeInterval) {
+                            frameRenderInterval = null;
+                        }
+                    }
+                }, 40); // 40ms = 25 FPS
+                
+                frameRenderInterval = activeInterval;
+            }, Math.max(0, delayMs));
+        }
+
+        function updatePlaybackProgress(chunk, frameIdx) {
+            // Buffer size updates (represented as number of chunks queued)
+            const size = chunkQueue.length;
+            bufSizeVal.innerText = `${size} chunks`;
+            const percent = Math.min((size / 5) * 100, 100);
             bufHealthBar.style.width = `${percent}%`;
             
             // Update timing stats
@@ -948,9 +1016,10 @@
                 
                 const chunkNum = chunk.chunk_idx + 1;
                 const totalChunks = chunk.total_chunks;
-                chunkProgressText.innerText = `Segment ${chunkNum} of ${totalChunks} playing...`;
+                // Display segment progress and frame index in the chunk
+                chunkProgressText.innerText = `Segment ${chunkNum} of ${totalChunks} (Frame ${frameIdx + 1}/50)`;
                 
-                const progressPercent = (chunkNum / totalChunks) * 100;
+                const progressPercent = ((chunk.chunk_idx * 50 + frameIdx) / (totalChunks * 50)) * 100;
                 chunkProgressBar.style.width = `${progressPercent}%`;
                 
                 // Highlight the active playing chat bubble (Feature 2 & 3)

@@ -1,0 +1,826 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FLOAT Real-Time Talking Head Stream</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=Space+Mono&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #0d0e12;
+            --card-bg: rgba(22, 25, 35, 0.7);
+            --border-color: rgba(102, 252, 241, 0.15);
+            --primary: #00ffcc;
+            --primary-hover: #00cca3;
+            --text-color: #f3f4f6;
+            --text-muted: #9ca3af;
+            --accent: #ff007f;
+            --glass-blur: blur(12px);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Outfit', sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow-x: hidden;
+            background-image: 
+                radial-gradient(at 10% 20%, rgba(0, 255, 204, 0.05) 0px, transparent 50%),
+                radial-gradient(at 90% 80%, rgba(255, 0, 127, 0.05) 0px, transparent 50%);
+        }
+
+        header {
+            padding: 24px 40px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            background: rgba(13, 14, 18, 0.8);
+            backdrop-filter: var(--glass-blur);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        header h1 {
+            font-size: 24px;
+            font-weight: 800;
+            letter-spacing: -0.5px;
+            background: linear-gradient(90deg, var(--primary), #00d2ff);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        header h1 span {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            background: var(--accent);
+            -webkit-text-fill-color: white;
+            padding: 3px 8px;
+            border-radius: 20px;
+            font-family: 'Space Mono', monospace;
+        }
+
+        .status-container {
+            display: flex;
+            gap: 16px;
+        }
+
+        .status-badge {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+            background: rgba(255, 255, 255, 0.05);
+            padding: 6px 14px;
+            border-radius: 30px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            font-family: 'Space Mono', monospace;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #ef4444; /* Default offline red */
+            box-shadow: 0 0 10px rgba(239, 68, 68, 0.5);
+            transition: all 0.3s ease;
+        }
+
+        .status-dot.active {
+            background: #22c55e;
+            box-shadow: 0 0 10px rgba(34, 197, 94, 0.5);
+        }
+
+        .status-dot.warning {
+            background: #f59e0b;
+            box-shadow: 0 0 10px rgba(245, 158, 11, 0.5);
+        }
+
+        main {
+            flex: 1;
+            max-width: 1400px;
+            width: 100%;
+            margin: 0 auto;
+            padding: 40px;
+            display: grid;
+            grid-template-columns: 1fr 1.2fr;
+            gap: 40px;
+        }
+
+        @media (max-width: 1024px) {
+            main {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .column {
+            display: flex;
+            flex-direction: column;
+            gap: 32px;
+        }
+
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 20px;
+            padding: 32px;
+            backdrop-filter: var(--glass-blur);
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+            position: relative;
+            overflow: hidden;
+            transition: border-color 0.3s ease;
+        }
+
+        .card:hover {
+            border-color: rgba(102, 252, 241, 0.3);
+        }
+
+        .card-title {
+            font-size: 18px;
+            font-weight: 600;
+            border-left: 3px solid var(--primary);
+            padding-left: 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        /* Uploader styling */
+        .upload-area {
+            border: 2px dashed rgba(102, 252, 241, 0.3);
+            border-radius: 16px;
+            padding: 40px 20px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            background: rgba(255, 255, 255, 0.02);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .upload-area:hover, .upload-area.dragover {
+            border-color: var(--primary);
+            background: rgba(0, 255, 204, 0.05);
+        }
+
+        .upload-icon {
+            font-size: 48px;
+            color: var(--primary);
+        }
+
+        .upload-text h3 {
+            font-size: 16px;
+            margin-bottom: 6px;
+        }
+
+        .upload-text p {
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+
+        #file-input {
+            display: none;
+        }
+
+        .avatar-preview-container {
+            display: flex;
+            gap: 20px;
+            align-items: center;
+            margin-top: 10px;
+        }
+
+        .avatar-thumbnail {
+            width: 90px;
+            height: 90px;
+            border-radius: 12px;
+            object-fit: cover;
+            border: 2px solid var(--primary);
+            box-shadow: 0 0 15px rgba(0, 255, 204, 0.3);
+        }
+
+        /* Control Form */
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        label {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-muted);
+        }
+
+        input[type="text"], select {
+            width: 100%;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 14px 18px;
+            border-radius: 12px;
+            color: var(--text-color);
+            font-family: inherit;
+            font-size: 15px;
+            outline: none;
+            transition: all 0.3s ease;
+        }
+
+        input[type="text"]:focus, select:focus {
+            border-color: var(--primary);
+            background: rgba(255, 255, 255, 0.08);
+            box-shadow: 0 0 10px rgba(0, 255, 204, 0.1);
+        }
+
+        .btn {
+            background: linear-gradient(90deg, var(--primary), #00d2ff);
+            color: #0b0c10;
+            font-weight: 700;
+            font-size: 16px;
+            padding: 16px 28px;
+            border: none;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 10px;
+            box-shadow: 0 4px 20px rgba(0, 255, 204, 0.25);
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 24px rgba(0, 255, 204, 0.4);
+        }
+
+        .btn:disabled {
+            background: #374151;
+            color: #9ca3af;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
+        /* Video Display Area */
+        .player-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background: #000;
+            border-radius: 16px;
+            aspect-ratio: 1/1;
+            width: 100%;
+            max-width: 512px;
+            margin: 0 auto;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+            position: relative;
+            overflow: hidden;
+        }
+
+        #video-canvas {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+
+        .canvas-placeholder {
+            position: absolute;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            color: var(--text-muted);
+            text-align: center;
+            padding: 20px;
+            transition: opacity 0.5s ease;
+        }
+
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 4px solid rgba(0, 255, 204, 0.1);
+            border-left-color: var(--primary);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        /* Stats indicators */
+        .metric-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 16px;
+        }
+
+        .metric-card {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            padding: 16px;
+            border-radius: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .metric-label {
+            font-size: 12px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-family: 'Space Mono', monospace;
+        }
+
+        .metric-value {
+            font-size: 20px;
+            font-weight: 700;
+            font-family: 'Space Mono', monospace;
+        }
+
+        .buffer-health-container {
+            width: 100%;
+            background: rgba(255, 255, 255, 0.05);
+            height: 8px;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-top: 4px;
+        }
+
+        .buffer-health-bar {
+            height: 100%;
+            background: linear-gradient(90deg, var(--primary), #00d2ff);
+            width: 0%;
+            transition: width 0.1s linear;
+        }
+
+        #log-area {
+            background: #08090d;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            padding: 16px;
+            font-family: 'Space Mono', monospace;
+            font-size: 13px;
+            color: #22c55e;
+            height: 120px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Custom scrollbar */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: rgba(0, 0, 0, 0.1);
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>FLOAT Stream <span>Distil-TRT</span></h1>
+        <div class="status-container">
+            <div class="status-badge">
+                <span>WS:</span>
+                <div id="ws-status-dot" class="status-dot"></div>
+                <span id="ws-status-text">Disconnected</span>
+            </div>
+            <div class="status-badge">
+                <span>Avatar:</span>
+                <div id="avatar-status-dot" class="status-dot"></div>
+                <span id="avatar-status-text">Unloaded</span>
+            </div>
+        </div>
+    </header>
+
+    <main>
+        <!-- Left column: inputs -->
+        <div class="column">
+            <!-- Card 1: Portrait Uploader -->
+            <div class="card">
+                <div class="card-title">1. Reference Portrait</div>
+                <div class="upload-area" id="drop-zone">
+                    <div class="upload-icon">👤</div>
+                    <div class="upload-text">
+                        <h3>Drag & drop reference image</h3>
+                        <p>Supports PNG or JPG (will crop face automatically)</p>
+                    </div>
+                    <input type="file" id="file-input" accept="image/*">
+                </div>
+                <div id="avatar-details" style="display: none;">
+                    <div class="avatar-preview-container">
+                        <img id="avatar-preview" class="avatar-thumbnail" src="" alt="Avatar Preview">
+                        <div>
+                            <h4 style="font-weight: 600;">Active Avatar</h4>
+                            <p id="avatar-filename" style="font-size: 14px; color: var(--text-muted);"></p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Card 2: Interactive Controls -->
+            <div class="card">
+                <div class="card-title">2. Text-to-Speech Control</div>
+                <div class="form-group">
+                    <label for="emotion-select">Emotion Setting</label>
+                    <select id="emotion-select">
+                        <option value="S2E">Speech-to-Emotion (S2E - Auto-detect)</option>
+                        <option value="neutral" selected>Neutral</option>
+                        <option value="happy">Happy</option>
+                        <option value="angry">Angry</option>
+                        <option value="sad">Sad</option>
+                        <option value="surprise">Surprise</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="text-input">Speech Content (English)</label>
+                    <input type="text" id="text-input" placeholder="Type a message for the avatar to say..." value="Hello! This is a real-time talking head streaming demo using FLOAT and TensorRT.">
+                </div>
+                <button id="submit-btn" class="btn" disabled>
+                    <span>Synthesize & Speak</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Right column: player and stats -->
+        <div class="column">
+            <!-- Card 3: Video Player -->
+            <div class="card">
+                <div class="card-title">
+                    <span>3. Live Output</span>
+                    <span id="playback-state" style="font-size: 13px; font-family: 'Space Mono', monospace; color: var(--primary);">IDLE</span>
+                </div>
+                <div class="player-container">
+                    <canvas id="video-canvas" width="512" height="512"></canvas>
+                    <div class="canvas-placeholder" id="player-placeholder">
+                        <div class="spinner" id="loading-spinner" style="display:none;"></div>
+                        <p id="placeholder-text">Upload avatar and connect to WebSocket to start stream</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Card 4: Metrics -->
+            <div class="card">
+                <div class="card-title">Performance Monitor</div>
+                <div class="metric-grid">
+                    <div class="metric-card">
+                        <div class="metric-label">Jitter Buffer Size</div>
+                        <div class="metric-value" id="buf-size-val">0 / 250</div>
+                        <div class="buffer-health-container">
+                            <div id="buf-health-bar" class="buffer-health-bar"></div>
+                        </div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-label">Average FPS</div>
+                        <div class="metric-value" id="fps-val">0.0</div>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Inference Log</label>
+                    <div id="log-area">Initializing client terminal...</div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file-input');
+        const submitBtn = document.getElementById('submit-btn');
+        const textInput = document.getElementById('text-input');
+        const emotionSelect = document.getElementById('emotion-select');
+        const avatarDetails = document.getElementById('avatar-details');
+        const avatarPreview = document.getElementById('avatar-preview');
+        const avatarFilename = document.getElementById('avatar-filename');
+        const canvas = document.getElementById('video-canvas');
+        const ctx = canvas.getContext('2d');
+        const placeholder = document.getElementById('player-placeholder');
+        const placeholderText = document.getElementById('placeholder-text');
+        const loadingSpinner = document.getElementById('loading-spinner');
+        const logArea = document.getElementById('log-area');
+        
+        // Status Badges
+        const wsStatusDot = document.getElementById('ws-status-dot');
+        const wsStatusText = document.getElementById('ws-status-text');
+        const avatarStatusDot = document.getElementById('avatar-status-dot');
+        const avatarStatusText = document.getElementById('avatar-status-text');
+        const playbackStateText = document.getElementById('playback-state');
+        
+        // Metrics
+        const bufSizeVal = document.getElementById('buf-size-val');
+        const bufHealthBar = document.getElementById('buf-health-bar');
+        const fpsVal = document.getElementById('fps-val');
+
+        // Streaming states
+        let ws = null;
+        let frameQueue = [];
+        let isPlaying = false;
+        let playbackInterval = null;
+        let isAvatarLoaded = false;
+        
+        // Web Audio API
+        let audioCtx = null;
+        let nextAudioStartTime = 0;
+        
+        // FPS Monitoring
+        let frameCount = 0;
+        let lastFpsUpdate = Date.now();
+
+        function log(message, type = 'info') {
+            const timeStr = new Date().toLocaleTimeString();
+            let color = '#22c55e'; // Green
+            if (type === 'error') color = '#ef4444';
+            if (type === 'warn') color = '#f59e0b';
+            
+            logArea.innerHTML += `<div style="color: ${color}">[${timeStr}] ${message}</div>`;
+            logArea.scrollTop = logArea.scrollHeight;
+        }
+
+        // Initialize Web Audio API on first user interaction
+        function initAudio() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+                log("Web Audio Context initialized.");
+            }
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+        }
+
+        // Connect to WebSocket Server
+        function connectWebSocket() {
+            const loc = window.location;
+            const wsProtocol = loc.protocol === "https:" ? "wss:" : "ws:";
+            const wsUrl = `${wsProtocol}//${loc.host}/stream`;
+            
+            log(`Connecting to stream WebSocket at: ${wsUrl}...`);
+            ws = new WebSocket(wsUrl);
+            
+            ws.onopen = () => {
+                wsStatusDot.className = "status-dot active";
+                wsStatusText.innerText = "Connected";
+                log("WebSocket connected successfully.");
+                updateUIState();
+            };
+            
+            ws.onclose = () => {
+                wsStatusDot.className = "status-dot";
+                wsStatusText.innerText = "Disconnected";
+                log("WebSocket disconnected.", "error");
+                stopPlayback();
+                updateUIState();
+                
+                // Reconnect attempt in 3 seconds
+                setTimeout(connectWebSocket, 3000);
+            };
+
+            ws.onerror = (err) => {
+                log("WebSocket encounterd error.", "error");
+                wsStatusDot.className = "status-dot";
+            };
+
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                if (data.image && data.audio) {
+                    frameQueue.push(data);
+                    
+                    // Jitter Buffer: wait for at least 15 frames (~600ms) before starting playback to absorb network jitter
+                    if (frameQueue.length >= 15 && !isPlaying) {
+                        log("Jitter buffer filled, starting playback loop...");
+                        startPlayback();
+                    }
+                }
+            };
+        }
+
+        function playAudioChunk(samples) {
+            if (!audioCtx) return;
+            
+            // samples is an array of floats
+            const buffer = audioCtx.createBuffer(1, samples.length, 16000);
+            buffer.copyToChannel(new Float32Array(samples), 0);
+            
+            const source = audioCtx.createBufferSource();
+            source.buffer = buffer;
+            source.connect(audioCtx.destination);
+            
+            // Audio timeline scheduling
+            const now = audioCtx.currentTime;
+            const startTime = Math.max(now, nextAudioStartTime);
+            source.start(startTime);
+            nextAudioStartTime = startTime + buffer.duration;
+        }
+
+        function startPlayback() {
+            if (isPlaying) return;
+            isPlaying = true;
+            placeholder.style.opacity = 0;
+            setTimeout(() => { placeholder.style.display = 'none'; }, 500);
+            
+            playbackInterval = setInterval(() => {
+                if (frameQueue.length > 0) {
+                    const chunk = frameQueue.shift();
+                    
+                    // 1. Draw frame on canvas
+                    const img = new Image();
+                    img.onload = () => {
+                        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                    };
+                    img.src = 'data:image/jpeg;base64,' + chunk.image;
+                    
+                    // 2. Play corresponding audio samples
+                    playAudioChunk(chunk.audio);
+                    
+                    // Update playback state indicator
+                    // If audio has sound (amplitude > 0.01), show ACTIVE, else show IDLE
+                    const isSilent = chunk.audio.every(x => Math.abs(x) < 0.001);
+                    playbackStateText.innerText = isSilent ? "IDLE / BREATHING" : "TALKING";
+                    playbackStateText.style.color = isSilent ? "#00ffcc" : "#ff007f";
+                    
+                    // Monitor FPS
+                    frameCount++;
+                    const now = Date.now();
+                    if (now - lastFpsUpdate >= 1000) {
+                        const fps = (frameCount / ((now - lastFpsUpdate) / 1000)).toFixed(1);
+                        fpsVal.innerText = fps;
+                        frameCount = 0;
+                        lastFpsUpdate = now;
+                    }
+                }
+                
+                // Monitor Buffer size
+                const size = frameQueue.length;
+                bufSizeVal.innerText = `${size} / 250`;
+                const percent = Math.min((size / 250) * 100, 100);
+                bufHealthBar.style.width = `${percent}%`;
+                
+            }, 40); // 40ms = 25 FPS
+        }
+
+        function stopPlayback() {
+            if (!isPlaying) return;
+            isPlaying = false;
+            if (playbackInterval) {
+                clearInterval(playbackInterval);
+            }
+            playbackStateText.innerText = "STOPPED";
+            playbackStateText.style.color = "#ef4444";
+            placeholder.style.display = 'flex';
+            placeholder.style.opacity = 1;
+        }
+
+        function updateUIState() {
+            const ready = ws && ws.readyState === WebSocket.OPEN && isAvatarLoaded;
+            submitBtn.disabled = !ready;
+            
+            if (!isAvatarLoaded) {
+                placeholderText.innerText = "Upload avatar to initialize visual model";
+            } else if (!ws || ws.readyState !== WebSocket.OPEN) {
+                placeholderText.innerText = "Connecting to streaming server...";
+            } else {
+                placeholderText.innerText = "Ready. Submit a prompt to start conversation!";
+            }
+        }
+
+        // Drag & Drop Listeners
+        dropZone.addEventListener('click', () => fileInput.click());
+        
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('dragover');
+        });
+        
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.classList.remove('dragover');
+        });
+        
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+            if (e.dataTransfer.files.length > 0) {
+                handleAvatarUpload(e.dataTransfer.files[0]);
+            }
+        });
+        
+        fileInput.addEventListener('change', () => {
+            if (fileInput.files.length > 0) {
+                handleAvatarUpload(fileInput.files[0]);
+            }
+        });
+
+        async function handleAvatarUpload(file) {
+            initAudio();
+            log(`Uploading portrait image: ${file.name}...`);
+            loadingSpinner.style.display = 'block';
+            placeholderText.innerText = "Extracting facial components & mapping landmarks...";
+            
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            try {
+                const response = await fetch('/init_avatar', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const result = await response.json();
+                if (response.ok) {
+                    log("Avatar initialized successfully!");
+                    isAvatarLoaded = true;
+                    avatarStatusDot.className = "status-dot active";
+                    avatarStatusText.innerText = "Loaded";
+                    
+                    // Show Thumbnail Preview
+                    avatarDetails.style.display = 'block';
+                    avatarFilename.innerText = file.name;
+                    
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        avatarPreview.src = e.target.result;
+                    };
+                    reader.readAsDataURL(file);
+                    
+                } else {
+                    log(`Avatar loading failed: ${result.detail || 'Unknown error'}`, 'error');
+                    isAvatarLoaded = false;
+                    avatarStatusDot.className = "status-dot";
+                    avatarStatusText.innerText = "Unloaded";
+                }
+            } catch (err) {
+                log(`Network error uploading avatar: ${err.message}`, 'error');
+                isAvatarLoaded = false;
+                avatarStatusDot.className = "status-dot";
+                avatarStatusText.innerText = "Unloaded";
+            } finally {
+                loadingSpinner.style.display = 'none';
+                updateUIState();
+            }
+        }
+
+        // Submit Text TTS Button
+        submitBtn.addEventListener('click', async () => {
+            initAudio();
+            const text = textInput.value.trim();
+            const emotion = emotionSelect.value;
+            if (!text) return;
+            
+            submitBtn.disabled = true;
+            log(`Submitting text: "${text}" with emotion: "${emotion}"...`);
+            
+            try {
+                const response = await fetch('/submit_text', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text, emotion })
+                });
+                
+                const result = await response.json();
+                if (response.ok) {
+                    log(`Generated ${result.duration_sec.toFixed(2)}s of TTS speech features in queue.`);
+                } else {
+                    log(`Speech generation failed: ${result.detail || 'Unknown error'}`, 'error');
+                }
+            } catch (err) {
+                log(`Network error sending speech text: ${err.message}`, 'error');
+            } finally {
+                submitBtn.disabled = false;
+            }
+        });
+
+        // Initialize WebSocket Connection
+        connectWebSocket();
+        log("Client terminal loaded. System waiting for model upload.");
+    </script>
+</body>
+</html>

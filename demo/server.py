@@ -66,6 +66,21 @@ is_preparing_speech = False
 current_speech_text_id = None
 jpeg_encode_pool = ThreadPool(processes=8)
 
+# Global pipeline and state
+pipeline = None
+avatar_data = None
+active_connections = set()
+active_texts = {}
+is_preparing_speech = False
+current_speech_text_id = None
+jpeg_encode_pool = ThreadPool(processes=8)
+
+# History tracking for smooth idle -> talking transitions
+generated_chunks_history = {}
+chunk_counter = 0
+client_playing_chunk_id = None
+GUARD_CHUNKS = 2
+
 # Setup templates
 templates = Jinja2Templates(directory="demo/templates")
 
@@ -108,7 +123,7 @@ def text_to_speech_samples(text: str, sampling_rate=16000) -> np.ndarray:
 
 def producer_thread_func():
     """Background daemon thread running the autoregressive inference loop."""
-    global avatar_data, pipeline, hidden_states
+    global avatar_data, pipeline, hidden_states, chunk_counter, client_playing_chunk_id, generated_chunks_history
     
     print("[Producer] Waiting for pipeline initialization...")
     while pipeline is None:
@@ -143,6 +158,7 @@ def producer_thread_func():
         text_id = "idle"
         chunk_idx = 0
         total_chunks = 1
+        transition_from = None
         
         start_inf = time.time()  # Start timing inference step (FMT + TRT Decoder)
         
@@ -157,6 +173,17 @@ def producer_thread_func():
                 text_id = chunk.get('text_id', 'speech')
                 chunk_idx = chunk.get('chunk_idx', 0)
                 total_chunks = chunk.get('total_chunks', 1)
+                
+                # Check for transition guard at first chunk
+                if chunk_idx == 0 and client_playing_chunk_id is not None:
+                    target_chunk_id = client_playing_chunk_id + GUARD_CHUNKS
+                    if target_chunk_id in generated_chunks_history:
+                        print(f"[Producer] Aligning transition: using hidden_states from idle chunk {target_chunk_id}")
+                        hidden_states = {
+                            'prev_x_t': generated_chunks_history[target_chunk_id]['prev_x_t'].clone().to(pipeline.opt.rank),
+                            'prev_wa_t': generated_chunks_history[target_chunk_id]['prev_wa_t'].clone().to(pipeline.opt.rank)
+                        }
+                        transition_from = target_chunk_id
                 
                 # Make sure hidden states has raw audio tensor (used for Ser emotion prediction)
                 if hidden_states is None:
@@ -222,11 +249,23 @@ def producer_thread_func():
         
         # 5. Pack the entire chunk into a list of JPEGs in parallel
         base64_frames = jpeg_encode_pool.map(encode_frame_to_base64, vid)
+        
+        # Increment global chunk counter and save state history
+        chunk_id = chunk_counter
+        chunk_counter += 1
+        if hidden_states is not None:
+            generated_chunks_history[chunk_id] = {
+                'prev_x_t': hidden_states['prev_x_t'].clone().cpu(),
+                'prev_wa_t': hidden_states['prev_wa_t'].clone().cpu()
+            }
+            if len(generated_chunks_history) > 50:
+                oldest = min(generated_chunks_history.keys())
+                generated_chunks_history.pop(oldest, None)
             
-        print(f"[Producer] Produced chunk for text_id={text_id} (chunk_idx={chunk_idx}/{total_chunks}) - inf_time={inf_time*1000:.1f}ms")
+        print(f"[Producer] Produced chunk {chunk_id} for text_id={text_id} (chunk_idx={chunk_idx}/{total_chunks}) - inf_time={inf_time*1000:.1f}ms")
         if text_id != "idle":
             frame_buffer.clear()
-        frame_buffer.put((base64_frames, audio_samples, text_id, chunk_idx, total_chunks, inf_time, mean_inf))
+        frame_buffer.put((base64_frames, audio_samples, text_id, chunk_idx, total_chunks, inf_time, mean_inf, chunk_id, transition_from))
             
         # Throttling: If the consumer is running slow and buffer starts piling up,
         # pause the producer thread temporarily to prevent GPU compute waste
@@ -456,6 +495,21 @@ async def stream_websocket(websocket: WebSocket):
     last_text_id = None
     chunks_sent_for_current_text = 0
     
+    # Receive loop task to get updates from client
+    async def receive_loop():
+        global client_playing_chunk_id
+        try:
+            while True:
+                data = await websocket.receive_json()
+                if data.get("type") == "playing":
+                    client_playing_chunk_id = data.get("chunk_id")
+        except WebSocketDisconnect:
+            pass
+        except Exception as e:
+            print(f"[WebSocket Receive Error] {e}")
+
+    receive_task = asyncio.create_task(receive_loop())
+    
     try:
         while True:
             start_time = time.time()
@@ -464,7 +518,7 @@ async def stream_websocket(websocket: WebSocket):
             item = frame_buffer.get()
             
             if item is not None:
-                base64_frames, audio_slice, text_id, chunk_idx, total_chunks, inf_time, mean_inf = item
+                base64_frames, audio_slice, text_id, chunk_idx, total_chunks, inf_time, mean_inf, chunk_id, transition_from = item
                 
                 # If we transition to a new segment (idle -> speech or speech -> idle),
                 # reset the burst counter to build a fresh client-side buffer
@@ -482,20 +536,16 @@ async def stream_websocket(websocket: WebSocket):
                     "chunk_idx": chunk_idx,
                     "total_chunks": total_chunks,
                     "inf_time_ms": int(inf_time * 1000),
-                    "mean_inf_ms": int(mean_inf * 1000)
+                    "mean_inf_ms": int(mean_inf * 1000),
+                    "chunk_id": chunk_id,
+                    "transition_from": transition_from
                 })
                 
                 chunks_sent_for_current_text += 1
                 
-                # Send the first 2 chunks of any new stream segment immediately (burst)
-                # to build a healthy client-side queue and absorb network jitter
-                if chunks_sent_for_current_text <= 2:
-                    await asyncio.sleep(0.05)  # 50ms small gap to prevent TCP congestion
-                else:
-                    # Sleep to maintain a steady 2.0 seconds interval per chunk
-                    elapsed = time.time() - start_time
-                    sleep_time = max(0, 2.0 - elapsed)
-                    await asyncio.sleep(sleep_time)
+                # Do NOT rate-limit here. The client's Web Audio scheduler controls pacing.
+                # Just yield briefly to prevent blocking the event loop.
+                await asyncio.sleep(0.005)
             else:
                 # Buffer empty (e.g. initial buffering), pause briefly (10ms)
                 await asyncio.sleep(0.010)
@@ -504,6 +554,7 @@ async def stream_websocket(websocket: WebSocket):
     except WebSocketDisconnect:
         print("[WebSocket] Client disconnected.")
     finally:
+        receive_task.cancel()
         active_connections.discard(websocket)
         print(f"[WebSocket] Cleaned connection. Total active: {len(active_connections)}")
 

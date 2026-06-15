@@ -731,11 +731,8 @@
         let isBuffering = true;
         let isAvatarLoaded = false;
         let lastIdleChunk = null;
-        
-        // Active timeouts / intervals for frames
-        let frameRenderInterval = null;
-        let frameRenderTimeout = null;
-        let chunkTransitionTimeout = null;
+        let currentPlayingChunk = null;
+        let scheduledChunks = [];
         
         // Web Audio API
         let audioCtx = null;
@@ -808,8 +805,9 @@
                     if (data.action === "interrupt") {
                         log("Interrupt signal received! Flushing queue and starting new speech.", "warn");
                         
-                        // Clear client playback queue
+                        // Clear client playback queue and scheduled chunks
                         chunkQueue = [];
+                        scheduledChunks = [];
                         
                         // Stop all scheduled/playing audio buffer sources
                         activeSources.forEach(src => {
@@ -819,15 +817,10 @@
                         });
                         activeSources = [];
                         
-                        // Reset audio timeline
+                        // Reset audio timeline — will be set to now+0.05 on next schedule call
                         nextAudioStartTime = 0;
                         isPlayingChunk = false;
                         isBuffering = true;
-                        
-                        // Clear active intervals
-                        if (frameRenderInterval) clearInterval(frameRenderInterval);
-                        if (frameRenderTimeout) clearTimeout(frameRenderTimeout);
-                        if (chunkTransitionTimeout) clearTimeout(chunkTransitionTimeout);
                         
                         // UI indicators update
                         playbackStateText.innerText = "INTERRUPTED";
@@ -845,10 +838,20 @@
                 
                 if (data.images && data.audio) {
                     if (data.text_id !== "idle") {
-                        chunkQueue = chunkQueue.filter(chunk => chunk.text_id !== "idle");
+                        if (data.transition_from !== undefined && data.transition_from !== null) {
+                            chunkQueue = chunkQueue.filter(chunk => {
+                                if (chunk.text_id === "idle") {
+                                    return chunk.chunk_id <= data.transition_from;
+                                }
+                                return true;
+                            });
+                        } else {
+                            chunkQueue = chunkQueue.filter(chunk => chunk.text_id !== "idle");
+                        }
                     }
                     chunkQueue.push(data);
-                    checkChunkQueue();
+                    // Immediately try to schedule into audio context when a chunk arrives
+                    if (audioCtx) scheduleNextChunks();
                 }
             };
         } // Close connectWebSocket
@@ -856,8 +859,15 @@
         function stopPlayback() {
             isPlayingChunk = false;
             isBuffering = true;
-            if (frameRenderInterval) clearInterval(frameRenderInterval);
-            if (frameRenderTimeout) clearTimeout(frameRenderTimeout);
+            scheduledChunks = [];
+            chunkQueue = [];
+            
+            // Stop all audio sources
+            activeSources.forEach(src => {
+                try { src.stop(); } catch (err) {}
+            });
+            activeSources = [];
+            nextAudioStartTime = 0;
             
             const wsConnected = ws && ws.readyState === WebSocket.OPEN;
             playbackStateText.innerText = wsConnected ? "BUFFERING" : "DISCONNECTED";
@@ -871,91 +881,23 @@
             }
         }
         
-        function checkChunkQueue() {
-            if (isPlayingChunk) return;
-
+        function scheduleNextChunks() {
+            if (!audioCtx) return;
             const wsConnected = ws && ws.readyState === WebSocket.OPEN;
+            const now = audioCtx.currentTime;
             
-            // Check if we have enough chunks to start or resume playback
-            let hasEnoughToPlay = false;
-            if (chunkQueue.length > 0) {
-                const first = chunkQueue[0];
-                if (!isBuffering) {
-                    // If we are already playing, we can immediately play the next chunk in the queue
-                    hasEnoughToPlay = true;
-                } else {
-                    // If we are in buffering state, we require a minimum buffer level (jitter buffer)
-                    if (first.text_id === "idle") {
-                        // For idle, wait for at least 2 chunks to prevent oscillation/jitter,
-                        // unless we are no longer connected to the server.
-                        hasEnoughToPlay = chunkQueue.length >= 2 || !wsConnected;
-                    } else {
-                        // For speech, wait for at least 2 chunks, OR play immediately if it's the final/only chunk
-                        hasEnoughToPlay = chunkQueue.length >= 2 || 
-                                          (first.chunk_idx === first.total_chunks - 1) ||
-                                          !wsConnected;
-                    }
-                }
-            }
-
-            if (hasEnoughToPlay) {
-                isBuffering = false;
-                const nextChunk = chunkQueue.shift();
-                playChunk(nextChunk);
-            } else {
-                // If queue is empty or doesn't meet the buffer requirement:
-                if (wsConnected) {
-                    // Enter/remain in buffering state, wait for more chunks to arrive via WebSocket.
-                    isBuffering = true;
-                    
-                    // Update state text to show we are waiting/buffering
-                    playbackStateText.innerText = "BUFFERING";
-                    playbackStateText.style.color = "#f59e0b";
-                    
-                    // Do not play a duplicate chunk while we are connected, so we get unique, naturally moving chunks.
-                } else {
-                    // If websocket is disconnected, fall back to lastIdleChunk or stop
-                    isBuffering = false;
-                    if (lastIdleChunk) {
-                        playChunk(lastIdleChunk);
-                    } else {
-                        stopPlayback();
-                    }
-                }
-            }
-        }
-        
-        function playChunk(chunk) {
-            console.log(`[Playback] Playing chunk: text_id=${chunk.text_id}, chunk_idx=${chunk.chunk_idx}, first_frame_sig=${chunk.images && chunk.images.length > 0 ? chunk.images[0].substring(chunk.images[0].length - 30) : 'none'}`);
-            // Clear any active transition or rendering intervals/timeouts immediately to prevent overlapping loops
-            if (chunkTransitionTimeout) {
-                clearTimeout(chunkTransitionTimeout);
-                chunkTransitionTimeout = null;
-            }
-            if (frameRenderInterval) {
-                clearInterval(frameRenderInterval);
-                frameRenderInterval = null;
-            }
-            if (frameRenderTimeout) {
-                clearTimeout(frameRenderTimeout);
-                frameRenderTimeout = null;
-            }
-
-            isPlayingChunk = true;
-            placeholder.style.opacity = 0;
-            setTimeout(() => { placeholder.style.display = 'none'; }, 200);
-            
-            // Save the last idle chunk for fallback loop
-            if (chunk.text_id === "idle") {
-                lastIdleChunk = chunk;
+            // If nextAudioStartTime has fallen behind now (idle gap), push it forward slightly.
+            // Never trim it backward when chunks are just slow to arrive.
+            if (nextAudioStartTime < now) {
+                nextAudioStartTime = now + 0.05; // 50ms safety lead-in to avoid start-clipping
             }
             
-            // Ensure audio context is initialized
-            initAudio();
-            
-            let delayMs = 0;
-            
-            if (audioCtx) {
+            // Schedule as many queued chunks as are ready (up to 4s of look-ahead)
+            while (chunkQueue.length > 0) {
+                const nextStart = nextAudioStartTime;
+                if (nextStart - now > 4.0) break; // don't schedule too far ahead
+                
+                const chunk = chunkQueue.shift();
                 try {
                     const samples = chunk.audio;
                     const buffer = audioCtx.createBuffer(1, samples.length, 16000);
@@ -964,22 +906,8 @@
                     const source = audioCtx.createBufferSource();
                     source.buffer = buffer;
                     source.connect(audioCtx.destination);
-                    
-                    const now = audioCtx.currentTime;
-                    
-                    // If audioCtx is suspended or nextAudioStartTime has accumulated a large lag, reset it
-                    if (audioCtx.state === 'suspended') {
-                        nextAudioStartTime = now;
-                    } else if (nextAudioStartTime - now > 0.5) {
-                        log(`Audio sync drift detected (${(nextAudioStartTime - now).toFixed(2)}s). Resetting audio timeline.`, "warn");
-                        nextAudioStartTime = now;
-                    } else if (now - nextAudioStartTime > 2.0) {
-                        nextAudioStartTime = now;
-                    }
-                    
-                    const startTime = Math.max(now, nextAudioStartTime);
-                    source.start(startTime);
-                    nextAudioStartTime = startTime + buffer.duration;
+                    source.start(nextStart);
+                    nextAudioStartTime = nextStart + buffer.duration;
                     
                     activeSources.push(source);
                     source.onended = () => {
@@ -987,59 +915,96 @@
                         if (idx > -1) activeSources.splice(idx, 1);
                     };
                     
-                    delayMs = (startTime - now) * 1000;
+                    scheduledChunks.push({
+                        chunk: chunk,
+                        startTime: nextStart,
+                        endTime: nextStart + buffer.duration
+                    });
+                    
+                    // Notify server which chunk was just committed
+                    if (ws && ws.readyState === WebSocket.OPEN && chunk.chunk_id !== undefined) {
+                        ws.send(JSON.stringify({ type: "playing", chunk_id: chunk.chunk_id }));
+                    }
+                    
+                    console.log(`[Schedule] text_id=${chunk.text_id} idx=${chunk.chunk_idx} start=${nextStart.toFixed(3)} end=${nextAudioStartTime.toFixed(3)}`);
                 } catch (e) {
-                    log(`Failed to play audio chunk: ${e.message}`, "error");
-                    delayMs = 0;
+                    log(`Failed to schedule chunk: ${e.message}`, "error");
                 }
-            } else {
-                delayMs = 0;
             }
             
-            // Transition to the next chunk exactly 2 seconds later (matching 50 frames at 25 FPS)
-            chunkTransitionTimeout = setTimeout(() => {
-                isPlayingChunk = false;
-                checkChunkQueue();
-            }, 2000);
-            
-            // Play Video (Draw 50 frames in sync)
-            renderFrames(chunk, delayMs);
+            // Fallback: loop lastIdleChunk when disconnected and queue is empty
+            if (chunkQueue.length === 0 && scheduledChunks.length === 0 && !wsConnected && lastIdleChunk) {
+                chunkQueue.push(JSON.parse(JSON.stringify(lastIdleChunk)));
+            }
         }
 
-        function renderFrames(chunk, delayMs) {
-            frameRenderTimeout = setTimeout(() => {
-                let frameIdx = 0;
-                // Capture the interval ID in a local closure so it cannot be cleared by another chunk
-                const activeInterval = setInterval(() => {
-                    if (frameIdx < chunk.images.length) {
-                        const img = new Image();
-                        img.onload = () => {
-                            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-                        };
-                        img.src = 'data:image/jpeg;base64,' + chunk.images[frameIdx];
-                        
-                        // Monitor FPS
-                        frameCount++;
-                        const curTime = Date.now();
-                        if (curTime - lastFpsUpdate >= 1000) {
-                            const fps = (frameCount / ((curTime - lastFpsUpdate) / 1000)).toFixed(1);
-                            fpsVal.innerText = fps;
-                            frameCount = 0;
-                            lastFpsUpdate = curTime;
-                        }
-                        
-                        updatePlaybackProgress(chunk, frameIdx);
-                        frameIdx++;
-                    } else {
-                        clearInterval(activeInterval);
-                        if (frameRenderInterval === activeInterval) {
-                            frameRenderInterval = null;
-                        }
-                    }
-                }, 40); // 40ms = 25 FPS
+        let lastDrawnFrameBase64 = null;
+        function drawFrame(base64Image) {
+            if (lastDrawnFrameBase64 === base64Image) return;
+            lastDrawnFrameBase64 = base64Image;
+            const img = new Image();
+            img.onload = () => { ctx.drawImage(img, 0, 0, canvas.width, canvas.height); };
+            img.src = 'data:image/jpeg;base64,' + base64Image;
+        }
+
+        function animationLoop() {
+            if (audioCtx) {
+                const now = audioCtx.currentTime;
                 
-                frameRenderInterval = activeInterval;
-            }, Math.max(0, delayMs));
+                // 1. Schedule any pending chunks into Web Audio (gapless look-ahead)
+                scheduleNextChunks();
+                
+                // 2. Pop the front chunk only after it has fully finished
+                //    This guarantees strict FIFO ordering — never skip, never reorder.
+                while (scheduledChunks.length > 0 && now >= scheduledChunks[0].endTime) {
+                    scheduledChunks.shift();
+                }
+                
+                // 3. Display chunk[0] — always the current one in order
+                if (scheduledChunks.length > 0) {
+                    const current = scheduledChunks[0];
+                    isPlayingChunk = true;
+                    isBuffering = false;
+                    placeholder.style.opacity = 0;
+                    placeholder.style.display = 'none';
+                    
+                    if (current.chunk.text_id === "idle") {
+                        lastIdleChunk = current.chunk;
+                    }
+                    
+                    // Clamp elapsed to [0, duration) so frameIdx stays in range
+                    const elapsed = Math.max(0, now - current.startTime);
+                    const frameIdx = Math.min(
+                        current.chunk.images.length - 1,
+                        Math.floor(elapsed * 25)
+                    );
+                    
+                    drawFrame(current.chunk.images[frameIdx]);
+                    
+                    // FPS counter
+                    frameCount++;
+                    const curTime = Date.now();
+                    if (curTime - lastFpsUpdate >= 1000) {
+                        fpsVal.innerText = (frameCount / ((curTime - lastFpsUpdate) / 1000)).toFixed(1);
+                        frameCount = 0;
+                        lastFpsUpdate = curTime;
+                    }
+                    
+                    updatePlaybackProgress(current.chunk, frameIdx);
+                } else {
+                    // Nothing playing — show buffering state
+                    isPlayingChunk = false;
+                    const wsConnected = ws && ws.readyState === WebSocket.OPEN;
+                    if (wsConnected) {
+                        isBuffering = true;
+                        playbackStateText.innerText = "BUFFERING";
+                        playbackStateText.style.color = "#f59e0b";
+                    } else {
+                        stopPlayback();
+                    }
+                }
+            }
+            requestAnimationFrame(animationLoop);
         }
 
         function updatePlaybackProgress(chunk, frameIdx) {
@@ -1256,6 +1221,9 @@
                 sendChatMessage();
             }
         });
+
+        // Start continuous animation loop
+        requestAnimationFrame(animationLoop);
 
         // Initialize WebSocket Connection
         connectWebSocket();

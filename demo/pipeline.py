@@ -272,6 +272,9 @@ class TalkingHeadPipeline:
         else:
             prev_x_t = hidden_states['prev_x_t'].to(device)
             prev_wa_t = hidden_states['prev_wa_t'].to(device)
+        
+        print("Input to model [pipeline.py]:")
+        print(prev_x_t.shape, prev_x_t.mean(), prev_x_t)
 
         # Pad audio features if shorter than 50 frames
         wa_t = audio_features
@@ -330,6 +333,8 @@ class TalkingHeadPipeline:
             next_prev_x = sample_t[:, -self.num_prev_frames:]
             next_prev_wa = wa_t[:, -self.num_prev_frames:]
             
+        print("pipeline.py")
+        print(sample_t[:, -self.num_prev_frames:].shape, torch.mean(sample_t[:, -self.num_prev_frames:]),  sample_t[:, -self.num_prev_frames:])
         next_hidden_states = {
             'prev_x_t': next_prev_x,
             'prev_wa_t': next_prev_wa

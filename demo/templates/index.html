@@ -728,6 +728,7 @@
         let ws = null;
         let chunkQueue = [];
         let isPlayingChunk = false;
+        let isBuffering = true;
         let isAvatarLoaded = false;
         let lastIdleChunk = null;
         
@@ -821,6 +822,7 @@
                         // Reset audio timeline
                         nextAudioStartTime = 0;
                         isPlayingChunk = false;
+                        isBuffering = true;
                         
                         // Clear active intervals
                         if (frameRenderInterval) clearInterval(frameRenderInterval);
@@ -850,6 +852,7 @@
 
         function stopPlayback() {
             isPlayingChunk = false;
+            isBuffering = true;
             if (frameRenderInterval) clearInterval(frameRenderInterval);
             if (frameRenderTimeout) clearTimeout(frameRenderTimeout);
             
@@ -866,20 +869,61 @@
         }
         
         function checkChunkQueue() {
-            if (chunkQueue.length > 0 && !isPlayingChunk) {
+            if (isPlayingChunk) return;
+
+            const wsConnected = ws && ws.readyState === WebSocket.OPEN;
+            
+            // Check if we have enough chunks to start or resume playback
+            let hasEnoughToPlay = false;
+            if (chunkQueue.length > 0) {
+                const first = chunkQueue[0];
+                if (!isBuffering) {
+                    // If we are already playing, we can immediately play the next chunk in the queue
+                    hasEnoughToPlay = true;
+                } else {
+                    // If we are in buffering state, we require a minimum buffer level (jitter buffer)
+                    if (first.text_id === "idle") {
+                        // For idle, wait for at least 2 chunks to prevent oscillation/jitter,
+                        // unless we are no longer connected to the server.
+                        hasEnoughToPlay = chunkQueue.length >= 2 || !wsConnected;
+                    } else {
+                        // For speech, wait for at least 2 chunks, OR play immediately if it's the final/only chunk
+                        hasEnoughToPlay = chunkQueue.length >= 2 || 
+                                          (first.chunk_idx === first.total_chunks - 1) ||
+                                          !wsConnected;
+                    }
+                }
+            }
+
+            if (hasEnoughToPlay) {
+                isBuffering = false;
                 const nextChunk = chunkQueue.shift();
                 playChunk(nextChunk);
-            } else if (chunkQueue.length === 0 && !isPlayingChunk) {
-                if (lastIdleChunk) {
-                    // Replay the last idle chunk to keep the avatar breathing naturally without freezing
-                    playChunk(lastIdleChunk);
+            } else {
+                // If queue is empty or doesn't meet the buffer requirement:
+                if (wsConnected) {
+                    // Enter/remain in buffering state, wait for more chunks to arrive via WebSocket.
+                    isBuffering = true;
+                    
+                    // Update state text to show we are waiting/buffering
+                    playbackStateText.innerText = "BUFFERING";
+                    playbackStateText.style.color = "#f59e0b";
+                    
+                    // Do not play a duplicate chunk while we are connected, so we get unique, naturally moving chunks.
                 } else {
-                    stopPlayback();
+                    // If websocket is disconnected, fall back to lastIdleChunk or stop
+                    isBuffering = false;
+                    if (lastIdleChunk) {
+                        playChunk(lastIdleChunk);
+                    } else {
+                        stopPlayback();
+                    }
                 }
             }
         }
         
         function playChunk(chunk) {
+            console.log(`[Playback] Playing chunk: text_id=${chunk.text_id}, chunk_idx=${chunk.chunk_idx}, first_frame_sig=${chunk.images && chunk.images.length > 0 ? chunk.images[0].substring(chunk.images[0].length - 30) : 'none'}`);
             // Clear any active transition or rendering intervals/timeouts immediately to prevent overlapping loops
             if (chunkTransitionTimeout) {
                 clearTimeout(chunkTransitionTimeout);

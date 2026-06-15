@@ -121,10 +121,7 @@ def producer_thread_func():
     hidden_states = None
     inference_times = []
     
-    # Pre-cache idle features (silence) to avoid calling wav2vec repeatedly when idle
-    idle_samples = np.random.normal(0, 1e-4, 32000).astype(np.float32)
-    idle_features = pipeline.process_audio_chunk(idle_samples)
-    idle_wa = idle_features['audio_features'].to(pipeline.opt.rank)
+    # Pre-caching removed to allow dynamic noise generation and prevent looping
     
     print("[Producer] Autoregressive GPU loop running.")
     
@@ -185,18 +182,25 @@ def producer_thread_func():
                 is_active = False
                 
         if not is_active:
-            # Idle state: feed silence and zero audio
+            # Idle state: feed low-level noise dynamically to break the limit cycle and prevent looping
             try:
+                # idle_samples = np.random.normal(0, 1e-4, 32000).astype(np.float32)
+                idle_samples = np.zeros(32000, dtype=np.float32)
+                idle_features = pipeline.process_audio_chunk(idle_samples)
+                idle_wa = idle_features['audio_features'].to(pipeline.opt.rank)
+                
                 if hidden_states is None:
                     hidden_states = {}
-                # hidden_states['raw_audio_tensor'] = torch.zeros(1, 32000, device=pipeline.opt.rank)
-                hidden_states['raw_audio_tensor'] = torch.randn(1, 32000, device=pipeline.opt.rank)
+                hidden_states['raw_audio_tensor'] = torch.from_numpy(idle_samples).unsqueeze(0).to(pipeline.opt.rank)
                 
+                if 'prev_x_t' in hidden_states:
+                    print("server.py")
+                    print(hidden_states['prev_x_t'].shape, hidden_states['prev_x_t'].mean(), hidden_states['prev_x_t'])
+                else: print("Just started")
                 frames, hidden_states = pipeline.inference_step(
                     audio_features=idle_wa,
                     hidden_states=hidden_states,
                     avatar_data=avatar_data,
-                    # emo='neutral'
                     emo='happy',
                     seed=int(np.random.randint(1, 1000000))
                 )

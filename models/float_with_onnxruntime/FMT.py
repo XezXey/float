@@ -327,6 +327,7 @@ class FlowMatchingTransformer(BaseModel):
 
 	@torch.no_grad()
 	def forward_with_cfv(self, t, x, wa, wr, we, prev_x, prev_wa, a_cfg_scale=2.0, r_cfg_scale=1.0, e_cfg_scale=1.0, **kwargs) -> torch.Tensor:
+		print("Timestep: ", t)
 		if a_cfg_scale != 1.0 or r_cfg_scale != 1.0 or e_cfg_scale != 1.0:
 			null_wa = torch.zeros_like(wa)
 			null_we = torch.zeros_like(we)

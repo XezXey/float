@@ -844,6 +844,9 @@
                 }
                 
                 if (data.images && data.audio) {
+                    if (data.text_id !== "idle") {
+                        chunkQueue = chunkQueue.filter(chunk => chunk.text_id !== "idle");
+                    }
                     chunkQueue.push(data);
                     checkChunkQueue();
                 }

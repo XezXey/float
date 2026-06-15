@@ -1,0 +1,22 @@
+{
+    "reference_audio_path": "../float/assets/silence.wav",
+    "reference_image_path": "./assets/Ton_face.png",
+    "video_frames": [
+        375,
+        3,
+        512,
+        512
+    ],
+    "generated_duration_sec": 15.0,
+    "metrics": {
+        "real_time_factor_RTF": 0.005738369623819987,
+        "generation_fps": 4356.638146177433
+    },
+    "timings": {
+        "encoding_time_sec": 1.6929984092712402,
+        "fmt_inference_time_sec": 0.0860755443572998,
+        "total_generation_loop_time_sec": 15.315781116485596,
+        "video_saving_time_sec": 10.66655945777893,
+        "total_process_time_sec": 34.19408893585205
+    }
+}

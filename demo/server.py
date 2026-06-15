@@ -18,6 +18,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, R
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
+import argparse
 
 # Add current workspace to path to allow importing demo modules
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -139,11 +140,6 @@ def producer_thread_func():
         # 3. Choose between active TTS audio vs. idle breathing
         is_active = not pending_audio_queue.empty()
         
-        # If we are preparing a speech segment, wait until it is queued rather than generating new idle chunks
-        if is_preparing_speech and not is_active:
-            time.sleep(0.01)
-            continue
-            
         text_id = "idle"
         chunk_idx = 0
         total_chunks = 1
@@ -228,6 +224,8 @@ def producer_thread_func():
         base64_frames = jpeg_encode_pool.map(encode_frame_to_base64, vid)
             
         print(f"[Producer] Produced chunk for text_id={text_id} (chunk_idx={chunk_idx}/{total_chunks}) - inf_time={inf_time*1000:.1f}ms")
+        if text_id != "idle":
+            frame_buffer.clear()
         frame_buffer.put((base64_frames, audio_samples, text_id, chunk_idx, total_chunks, inf_time, mean_inf))
             
         # Throttling: If the consumer is running slow and buffer starts piling up,
@@ -247,17 +245,18 @@ def startup_event():
     global pipeline
     print("[Server] Loading Talking Head Pipeline on device cuda:1 (via env mappings)...")
     
-    ckpt_path = os.getenv(
-        "CKPT_PATH", 
-        "/data2/mint/SCB-RealTimeTalkingHead/checkpoint_distil/2026-04-29_DistilFLOAT_ECFG-10.0_LR-2e-05_BS-16_TrainSize-9960_FixSeed-True_EmotionLambda-1.0_MotionLambda-1.0_AudioLambda-1.0-VelLoss-FMTWeight/student_fmt_best_earlystop.pt"
-    )
+    is_teacher_env = os.getenv("IS_TEACHER", "False").lower() in ("true", "1", "t", "yes")
+    
+    default_ckpt = "./checkpoints/float.pth" if is_teacher_env else "/data2/mint/SCB-RealTimeTalkingHead/checkpoint_distil/2026-04-29_DistilFLOAT_ECFG-10.0_LR-2e-05_BS-16_TrainSize-9960_FixSeed-True_EmotionLambda-1.0_MotionLambda-1.0_AudioLambda-1.0-VelLoss-FMTWeight/student_fmt_best_earlystop.pt"
+    ckpt_path = os.getenv("CKPT_PATH", default_ckpt)
     trt_decoder_path = os.getenv("TRT_DECODER_PATH", "trt_models/float_decoder_fp16.trt")
     
     pipeline = TalkingHeadPipeline(
         ckpt_path=ckpt_path,
         trt_decoder_path=trt_decoder_path,
         a_cfg_scale=2.0,
-        e_cfg_scale=5.5
+        e_cfg_scale=5.5,
+        is_teacher=is_teacher_env if os.getenv("IS_TEACHER") is not None else None
     )
     
     # Start background producer daemon thread
@@ -378,20 +377,12 @@ async def submit_text(req: TextRequest):
         current_speech_text_id = text_id
         active_texts[text_id] = req.text
         
-        # Clear frame buffer (discard unplayed idle chunks) and pending audio queue
-        frame_buffer.clear()
+        # Clear pending audio queue
         while not pending_audio_queue.empty():
             try:
                 pending_audio_queue.get_nowait()
             except queue.Empty:
                 break
-                
-        # Send WebSocket control message to all active clients to filter out unplayed idle chunks
-        for ws in list(active_connections):
-            try:
-                await ws.send_json({"type": "control", "action": "prepare_speech"})
-            except Exception as e:
-                print(f"[WebSocket Error] Failed to send prepare_speech: {e}")
         
         # Split text into sentences for streaming/pipelining
         sentences = split_into_sentences(req.text)
@@ -517,6 +508,10 @@ async def stream_websocket(websocket: WebSocket):
         print(f"[WebSocket] Cleaned connection. Total active: {len(active_connections)}")
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--is_teacher", action="store_true", default=False, help="Flag to indicate if the user is a teacher")
+    args = parser.parse_args()
+
     import uvicorn
     # Set CWD to float root so paths locate correctly
     uvicorn.run(app, host="0.0.0.0", port=4747)

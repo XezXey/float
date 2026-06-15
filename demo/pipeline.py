@@ -26,6 +26,8 @@ if distil_path not in sys.path:
     sys.path.append(distil_path)
 
 from models.float.FLOAT_distil import FLOAT as StudentFLOAT
+from models.float_with_onnxruntime.FLOAT_TRT import FLOAT as TeacherFLOAT
+from torchdiffeq import odeint
 from scripts.distil_component import load_distilled_weight
 from scripts.data_processor import DataProcessor as StudentDataProcessor
 from generate import InferenceOptions as DistilInferenceOptions
@@ -125,6 +127,33 @@ class StudentFLOATWithTRTDecoder(StudentFLOAT):
         d_hat = torch.stack(d_hat, dim=1).squeeze()
         return {'d_hat': d_hat}
 
+class TeacherFLOATWithTRTDecoder(TeacherFLOAT):
+    def __init__(self, opt, trt_decoder_path=None):
+        super().__init__(opt, trt_decoder_path=trt_decoder_path)
+
+    @torch.no_grad()
+    def decode_latent_into_image(self, s_r: torch.Tensor, s_r_feats: list, r_d: torch.Tensor) -> dict:
+        T = r_d.shape[1]
+        d_hat = []
+        
+        # Ensure context is pushed for TensorRT execution
+        if self.context is not None:
+            self.context.push()
+        try:
+            for t in range(T):
+                s_r_d_t = s_r + r_d[:, t]
+                if getattr(self, 'trt_dec_inferencer', None) is not None:
+                    img_t = self.forward_decoder_tensorrt(s_r_d_t, s_r_feats)
+                else:
+                    img_t, _ = self.motion_autoencoder.dec(s_r_d_t, alpha=None, feats=s_r_feats)
+                d_hat.append(img_t)
+        finally:
+            if self.context is not None:
+                self.context.pop()
+                
+        d_hat = torch.stack(d_hat, dim=1).squeeze()
+        return {'d_hat': d_hat}
+
 class StudentInferenceOptions(DistilInferenceOptions):
     def __init__(self):
         super().__init__()
@@ -142,7 +171,7 @@ class StudentInferenceOptions(DistilInferenceOptions):
         return parser
 
 class TalkingHeadPipeline:
-    def __init__(self, ckpt_path, trt_decoder_path, a_cfg_scale=2.0, e_cfg_scale=5.5):
+    def __init__(self, ckpt_path, trt_decoder_path, a_cfg_scale=2.0, e_cfg_scale=5.5, is_teacher=None):
         # Programmatically setup default options
         parser = argparse.ArgumentParser()
         opt_builder = StudentInferenceOptions()
@@ -157,15 +186,31 @@ class TalkingHeadPipeline:
         self.opt.rank = 0  # Device 0 under CUDA_VISIBLE_DEVICES=1 (maps to GPU 1)
         self.opt.ngpus = 1
         
-        print(f"[Pipeline] Initializing pipeline with rank={self.opt.rank}")
+        if is_teacher is None:
+            is_teacher = "student" not in os.path.basename(ckpt_path).lower() and "distil" not in os.path.basename(ckpt_path).lower()
+        self.is_teacher = is_teacher
+        
+        print(f"[Pipeline] Initializing pipeline with rank={self.opt.rank}, is_teacher={self.is_teacher}")
         torch.cuda.empty_cache()
         
-        # Instantiate student model
-        self.model = StudentFLOATWithTRTDecoder(self.opt, trt_decoder_path=trt_decoder_path)
-        
-        print(f"[Pipeline] Loading weights from {ckpt_path}")
-        load_distilled_weight(self.model, ckpt_path, self.opt.rank)
-        
+        # Instantiate model
+        if self.is_teacher:
+            self.model = TeacherFLOATWithTRTDecoder(self.opt, trt_decoder_path=trt_decoder_path)
+            print(f"[Pipeline] Loading teacher weights from {ckpt_path}")
+            state_dict = torch.load(ckpt_path, map_location='cpu', weights_only=True)
+            with torch.no_grad():
+                for model_name, model_param in self.model.named_parameters():
+                    if model_name in state_dict:
+                        model_param.copy_(state_dict[model_name].to(self.opt.rank))
+                    elif "wav2vec2" in model_name: pass
+                    else:
+                        print(f"! Warning; {model_name} not found in state_dict.")
+            del state_dict
+        else:
+            self.model = StudentFLOATWithTRTDecoder(self.opt, trt_decoder_path=trt_decoder_path)
+            print(f"[Pipeline] Loading student weights from {ckpt_path}")
+            load_distilled_weight(self.model, ckpt_path, self.opt.rank)
+            
         self.model.to(self.opt.rank)
         self.model.eval()
         
@@ -241,7 +286,7 @@ class TalkingHeadPipeline:
 
     def inference_step(self, audio_features, hidden_states, previous_frames=None, avatar_data=None, emo='S2E', seed=42):
         """
-        One forward pass through Student model + TensorRT decoder.
+        One forward pass through Student/Teacher model + TensorRT decoder.
         Args:
             audio_features: torch.Tensor of shape [1, 50, 512] (on GPU)
             hidden_states: dict containing 'prev_x_t' [1, 10, 512] and 'prev_wa_t' [1, 10, 512]
@@ -285,10 +330,6 @@ class TalkingHeadPipeline:
         emo_idx = self.model.emotion_encoder.label2id.get(str(emo).lower(), None)
         if emo_idx is None:
             # S2E mode: require a raw audio feature tensor
-            # Since ser classification expects a, we pad or reconstruct it
-            # We can create a dummy 2s silent audio if none is provided
-            # Or we can predict emotion if a raw audio tensor is passed in hidden_states or avatar_data
-            # In our system, process_audio_chunk returns raw_audio_tensor.
             raw_a = hidden_states.get('raw_audio_tensor', None)
             if raw_a is not None:
                 we = self.model.emotion_encoder.predict_emotion(raw_a.to(device)).unsqueeze(1)
@@ -304,25 +345,60 @@ class TalkingHeadPipeline:
         g.manual_seed(seed)
         x0 = torch.randn(B, self.num_frames_for_clip, self.dim_w, device=device, generator=g)
         
-        # 3. FMT Forward Pass
-        t_zero = torch.zeros(B, device=device)
+        # 3. FMT Forward Pass / ODE Solver
         with torch.no_grad():
-            v_pred = self.model.fmt.forward(
-                t=t_zero,
-                x=x0,
-                wa=wa_t,
-                wr=r_s,
-                we=we,
-                prev_x=prev_x_t,
-                prev_wa=prev_wa_t,
-                a_cfg_scale=self.opt.a_cfg_scale,
-                r_cfg_scale=self.opt.r_cfg_scale,
-                e_cfg_scale=self.opt.e_cfg_scale,
-                train=False
-            )
-            
-            # Predict next latents
-            sample_t = x0 + v_pred[:, self.num_prev_frames:]
+            if self.is_teacher:
+                time_steps = torch.linspace(0, 1, self.opt.nfe, device=device)
+                
+                def sample_chunk(tt, zt):
+                    if getattr(self.model, 'trt_inferencer', None) is not None:
+                        out = self.model.forward_with_cfv_tensorrt(
+                            t=tt.unsqueeze(0),
+                            x=zt,
+                            wa=wa_t,
+                            wr=r_s,
+                            we=we,
+                            prev_x=prev_x_t,
+                            prev_wa=prev_wa_t,
+                            a_cfg_scale=self.opt.a_cfg_scale,
+                            r_cfg_scale=self.opt.r_cfg_scale,
+                            e_cfg_scale=self.opt.e_cfg_scale
+                        )
+                    else:
+                        out = self.model.fmt.forward_with_cfv(
+                            t=tt.unsqueeze(0),
+                            x=zt,
+                            wa=wa_t,
+                            wr=r_s,
+                            we=we,
+                            prev_x=prev_x_t,
+                            prev_wa=prev_wa_t,
+                            a_cfg_scale=self.opt.a_cfg_scale,
+                            r_cfg_scale=self.opt.r_cfg_scale,
+                            e_cfg_scale=self.opt.e_cfg_scale
+                        )
+                    out_current = out[:, self.num_prev_frames:]
+                    return out_current
+                
+                trajectory_t = odeint(sample_chunk, x0, time_steps, **self.model.odeint_kwargs)
+                sample_t = trajectory_t[-1]
+            else:
+                t_zero = torch.zeros(B, device=device)
+                v_pred = self.model.fmt.forward(
+                    t=t_zero,
+                    x=x0,
+                    wa=wa_t,
+                    wr=r_s,
+                    we=we,
+                    prev_x=prev_x_t,
+                    prev_wa=prev_wa_t,
+                    a_cfg_scale=self.opt.a_cfg_scale,
+                    r_cfg_scale=self.opt.r_cfg_scale,
+                    e_cfg_scale=self.opt.e_cfg_scale,
+                    train=False
+                )
+                # Predict next latents
+                sample_t = x0 + v_pred[:, self.num_prev_frames:]
             
             # 4. Decode latents into images via TensorRT / motion autoencoder
             # (Note: context push/pop is handled inside decode_latent_into_image wrapper)

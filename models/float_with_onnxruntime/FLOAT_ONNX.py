@@ -47,91 +47,91 @@ class FLOAT(BaseModel):
 			'method': self.opt.torchdiffeq_ode_method
 		}
   
-		# ONNX Runtime session for forward_with_cfv
-		if onnx_model_path is None:
-			print("[#] No ONNX model path provided. Using PyTorch implementation. (For accelerate_dev/onnx_export.py)")
-		else:
-			print("#"*100)
-			print(f"[#] Initializing ONNX Runtime session with model: {onnx_model_path} and provider: {onnx_provider}")
-			self.init_onnx_runtime(onnx_model_path, onnx_provider)
-			print("#"*100)
+		# # ONNX Runtime session for forward_with_cfv
+		# if onnx_model_path is None:
+		# 	print("[#] No ONNX model path provided. Using PyTorch implementation. (For accelerate_dev/onnx_export.py)")
+		# else:
+		# 	print("#"*100)
+		# 	print(f"[#] Initializing ONNX Runtime session with model: {onnx_model_path} and provider: {onnx_provider}")
+		# 	self.init_onnx_runtime(onnx_model_path, onnx_provider)
+		# 	print("#"*100)
    
-	def init_onnx_runtime(self, onnx_model_path: str, onnx_provider: str):
-			self.onnx_model_path = onnx_model_path
+	# def init_onnx_runtime(self, onnx_model_path: str, onnx_provider: str):
+	# 		self.onnx_model_path = onnx_model_path
 			
-			if not os.path.isfile(self.onnx_model_path):
-				raise FileNotFoundError(
-					f"ONNX model file not found at '{self.onnx_model_path}'. "
-					"Please run export_onnx.py to export it first."
-				)
+	# 		if not os.path.isfile(self.onnx_model_path):
+	# 			raise FileNotFoundError(
+	# 				f"ONNX model file not found at '{self.onnx_model_path}'. "
+	# 				"Please run export_onnx.py to export it first."
+	# 			)
 				
-			# Configure execution providers
-			if onnx_provider == "cuda":
-				self.providers = [
-        			("TensorrtExecutionProvider", {
-        			    "device_id": 0,
-        			    "trt_max_workspace_size": 2 * 1024 * 1024 * 1024,
-        			    "trt_fp16_enable": True,
-        			    "trt_engine_cache_enable": True,
-        			    "trt_engine_cache_path": "./trt_cache",
-        			}),
-					("CUDAExecutionProvider", {
-						"device_id": 0,
-						"arena_extend_strategy": "kNextPowerOfTwo",
-						"gpu_mem_limit": 2 * 1024 * 1024 * 1024,
-						"cudnn_conv_algo_search": "EXHAUSTIVE",
-						"do_copy_in_default_stream": True,
-					}),
-					"CPUExecutionProvider"
-				]
-			else:
-				self.providers = ["CPUExecutionProvider"]
+	# 		# Configure execution providers
+	# 		if onnx_provider == "cuda":
+	# 			self.providers = [
+    #     			("TensorrtExecutionProvider", {
+    #     			    "device_id": 0,
+    #     			    "trt_max_workspace_size": 2 * 1024 * 1024 * 1024,
+    #     			    "trt_fp16_enable": True,
+    #     			    "trt_engine_cache_enable": True,
+    #     			    "trt_engine_cache_path": "./trt_cache",
+    #     			}),
+	# 				("CUDAExecutionProvider", {
+	# 					"device_id": 0,
+	# 					"arena_extend_strategy": "kNextPowerOfTwo",
+	# 					"gpu_mem_limit": 2 * 1024 * 1024 * 1024,
+	# 					"cudnn_conv_algo_search": "EXHAUSTIVE",
+	# 					"do_copy_in_default_stream": True,
+	# 				}),
+	# 				"CPUExecutionProvider"
+	# 			]
+	# 		else:
+	# 			self.providers = ["CPUExecutionProvider"]
 				
-			print(f"[ONNXPredictor] Initializing session with providers: {self.providers}")
-			self.session_options = ort.SessionOptions()
-			self.session_options.log_severity_level = 3  # Suppress INFO and WARNING logs from ONNX Runtime, 0 = VERBOSE, 1 = INFO, 2 = WARNING, 3 = ERROR
-			self.fmt_onnx_session = ort.InferenceSession(self.onnx_model_path, providers=self.providers, sess_options=self.session_options)
-			self.fmt_onnx_inputs = self.fmt_onnx_session.get_inputs()
-			self.fmt_onnx_outputs = self.fmt_onnx_session.get_outputs()
-			print(f"[ONNXPredictor] fmt_onnx_inputs: {[inp.name for inp in self.fmt_onnx_inputs]}")
-			print(f"[ONNXPredictor] fmt_onnx_outputs: {[out.name for out in self.fmt_onnx_outputs]}")
+	# 		print(f"[ONNXPredictor] Initializing session with providers: {self.providers}")
+	# 		self.session_options = ort.SessionOptions()
+	# 		self.session_options.log_severity_level = 3  # Suppress INFO and WARNING logs from ONNX Runtime, 0 = VERBOSE, 1 = INFO, 2 = WARNING, 3 = ERROR
+	# 		self.fmt_onnx_session = ort.InferenceSession(self.onnx_model_path, providers=self.providers, sess_options=self.session_options)
+	# 		self.fmt_onnx_inputs = self.fmt_onnx_session.get_inputs()
+	# 		self.fmt_onnx_outputs = self.fmt_onnx_session.get_outputs()
+	# 		print(f"[ONNXPredictor] fmt_onnx_inputs: {[inp.name for inp in self.fmt_onnx_inputs]}")
+	# 		print(f"[ONNXPredictor] fmt_onnx_outputs: {[out.name for out in self.fmt_onnx_outputs]}")
 
-			# Save input names for quick access during run
-			self.fmt_onnx_input_names = [inp.name for inp in self.fmt_onnx_inputs]
-			self.fmt_onnx_output_name = self.fmt_onnx_outputs[0].name
+	# 		# Save input names for quick access during run
+	# 		self.fmt_onnx_input_names = [inp.name for inp in self.fmt_onnx_inputs]
+	# 		self.fmt_onnx_output_name = self.fmt_onnx_outputs[0].name
 
-			# Log which provider was actually chosen by ONNX Runtime
-			print("="*100)
-			print(f"[ONNXPredictor] Session successfully created. Active providers: {self.fmt_onnx_session.get_providers()}")
-			print(f"[ONNXPredictor] Inputs expected: {self.fmt_onnx_input_names}")
-			print(f"[ONNXPredictor] Output name: '{self.fmt_onnx_output_name}'")
-			print("="*100)
+	# 		# Log which provider was actually chosen by ONNX Runtime
+	# 		print("="*100)
+	# 		print(f"[ONNXPredictor] Session successfully created. Active providers: {self.fmt_onnx_session.get_providers()}")
+	# 		print(f"[ONNXPredictor] Inputs expected: {self.fmt_onnx_input_names}")
+	# 		print(f"[ONNXPredictor] Output name: '{self.fmt_onnx_output_name}'")
+	# 		print("="*100)
 	
-			self.warmup_onnx_runtime()
+	# 		self.warmup_onnx_runtime()
   
-	@torch.no_grad()
-	def warmup_onnx_runtime(self):
-		print("[ONNXPredictor] Warming up ONNX Runtime with dummy inputs...")
+	# @torch.no_grad()
+	# def warmup_onnx_runtime(self):
+	# 	print("[ONNXPredictor] Warming up ONNX Runtime with dummy inputs...")
 
-		from accelerate_dev._fmt_utils import load_fmt_wrapper, build_dummy_inputs, add_model_args
-		dummy_inputs = build_dummy_inputs(self.opt, device='cuda', batch=1)
-		feed_dict = {
-			"t": dummy_inputs[0].cpu().numpy().astype(np.float32),
-			"x": dummy_inputs[1].cpu().numpy().astype(np.float32),
-			"wa": dummy_inputs[2].cpu().numpy().astype(np.float32),
-			"wr": dummy_inputs[3].cpu().numpy().astype(np.float32),
-			"we": dummy_inputs[4].cpu().numpy().astype(np.float32),
-			"prev_x": dummy_inputs[5].cpu().numpy().astype(np.float32),
-			"prev_wa": dummy_inputs[6].cpu().numpy().astype(np.float32),
-			"a_cfg_scale": dummy_inputs[7].cpu().numpy().astype(np.float32),
-			"e_cfg_scale": dummy_inputs[8].cpu().numpy().astype(np.float32)
-		}
+	# 	from accelerate_dev._fmt_utils import load_fmt_wrapper, build_dummy_inputs, add_model_args
+	# 	dummy_inputs = build_dummy_inputs(self.opt, device='cuda', batch=1)
+	# 	feed_dict = {
+	# 		"t": dummy_inputs[0].cpu().numpy().astype(np.float32),
+	# 		"x": dummy_inputs[1].cpu().numpy().astype(np.float32),
+	# 		"wa": dummy_inputs[2].cpu().numpy().astype(np.float32),
+	# 		"wr": dummy_inputs[3].cpu().numpy().astype(np.float32),
+	# 		"we": dummy_inputs[4].cpu().numpy().astype(np.float32),
+	# 		"prev_x": dummy_inputs[5].cpu().numpy().astype(np.float32),
+	# 		"prev_wa": dummy_inputs[6].cpu().numpy().astype(np.float32),
+	# 		"a_cfg_scale": dummy_inputs[7].cpu().numpy().astype(np.float32),
+	# 		"e_cfg_scale": dummy_inputs[8].cpu().numpy().astype(np.float32)
+	# 	}
 
-		start_time = time.time()
-		for i in tqdm.tqdm(range(100)):
-			_ = self.fmt_onnx_session.run([self.fmt_onnx_output_name], feed_dict)
-		end_time = time.time()
-		print(f"[ONNXPredictor] Warmup completed in {end_time - start_time:.2f} seconds.")
+	# 	start_time = time.time()
+	# 	for i in tqdm.tqdm(range(100)):
+	# 		_ = self.fmt_onnx_session.run([self.fmt_onnx_output_name], feed_dict)
+	# 	end_time = time.time()
+	# 	print(f"[ONNXPredictor] Warmup completed in {end_time - start_time:.2f} seconds.")
  
  
 	######## Motion Encoder - Decoder ########

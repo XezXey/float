@@ -35,9 +35,18 @@ to run for decoder:
 python ./accelerate_dev/export_decoder_onnx.py --output_dir <outputh_dir> --model_name <output_onnx_model_name>
 
 example:
-
 1. Converting FLOAT's decoder (.pt) into ONNX:
 python ./accelerate_dev/export_decoder_onnx.py --output_dir ./test_before_released/decoder/ --model_name float_decoder.onnx 
+2. Converting FLOAT's FMT (.pt) into ONNX:
+python ./accelerate_dev/export_decoder_onnx.py --output_dir ./test_before_released/decoder/ --model_name float_decoder.onnx 
+
+cli argument
+--ckpt_path = specify the path to FLOAT's pytorch checkpoints (.pt)
+--output_dir = Output directory to save the ONNX model
+--model_name = naming the ONNX model
+--opset = Supported operation set of Pytorch (recommned opset=17 is relatively support mostly new layer,operations implementation)
+--batch-size = keep this fixed to 1 
+--verbose = verbose text during conversion
 
 
 Step 2: Convert ONNX model into TensorRT
@@ -53,7 +62,12 @@ python ./accelerate_dev/build_decoder_tensorrt.py
 ./test_before_released/decoder/ 
 --precision <precision>
 
-available precision choices: fp32, fp16, tf32, fp8
+cli argument
+--input_onnx_path: specify the input onnx model (.onnx)
+--output_engine_path: path to save the TensorRT engine file (.trt)
+--precision: quantization mode which has fp32, fp16, tf32, fp8 available
+misc (keep this fixed)
+--min_batch, --opt_batch, --max_batch: we autoregressively generate per chunks so we can keep this for TensorRT optimization profile as 1, we dont need the dynamic batch size for this matter.
 
 Note: For FP8, some layers that cant be quantized into FP8 would automatically fallbakcs into FP16 by TensorRT's builder
 

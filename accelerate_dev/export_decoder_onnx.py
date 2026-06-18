@@ -11,6 +11,7 @@ import os
 import sys
 import argparse
 import torch
+import warnings
 from rich.console import Console
 console = Console()
 print = console.print
@@ -39,7 +40,7 @@ class DecoderWrapper(torch.nn.Module):
         return img
 
 def main():
-    parser = argparse.ArgumentParser(description="Export FLOAT Synthesis Decoder to ONNX format")
+    parser = argparse.ArgumentParser(description="Export FLOAT's Decoder to ONNX format")
     parser.add_argument(
         "--ckpt_path",
         type=str,
@@ -70,8 +71,18 @@ def main():
         default=1,
         help="Batch size for the dummy inputs during export",
     )
-
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        default=False,
+        help="Enable verbose logging"
+    )
+    
     args, extra_args = parser.parse_known_args()
+    if not args.verbose:
+        from torch.jit import TracerWarning
+        warnings.filterwarnings("ignore", category=UserWarning)
+        warnings.filterwarnings("ignore", category=TracerWarning)
 
     # Build default options
     sys.argv = [sys.argv[0]]
@@ -168,7 +179,7 @@ def main():
     # a static batch size of 1 is perfectly suited and avoids shape-tracing errors.
     dynamic_axes = None
 
-    print(f"[cyan]\[#] Exporting Synthesis Decoder to ONNX (opset_version={args.opset})...")
+    print(f"[cyan]\[#] Exporting FLOAT's Decoder into ONNX format (opset_version={args.opset})...")
     torch.onnx.export(
         dec_wrapper,
         dummy_inputs,

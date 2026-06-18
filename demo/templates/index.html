@@ -647,7 +647,7 @@
 
                 <div class="metric-grid" style="grid-template-columns: repeat(3, 1fr);">
                     <div class="metric-card">
-                        <div class="metric-label">Jitter Buffer</div>
+                        <div class="metric-label">Buffer's queue</div>
                         <div class="metric-value" id="buf-size-val">0 / 250</div>
                         <div class="buffer-health-container">
                             <div id="buf-health-bar" class="buffer-health-bar"></div>
@@ -733,6 +733,7 @@
         let lastIdleChunk = null;
         let currentPlayingChunk = null;
         let scheduledChunks = [];
+        let lastReceivedTextId = "idle";
         
         // Web Audio API
         let audioCtx = null;
@@ -838,17 +839,21 @@
                 
                 if (data.images && data.audio) {
                     if (data.text_id !== "idle") {
-                        if (data.transition_from !== undefined && data.transition_from !== null) {
-                            chunkQueue = chunkQueue.filter(chunk => {
-                                if (chunk.text_id === "idle") {
-                                    return chunk.chunk_id <= data.transition_from;
-                                }
-                                return true;
-                            });
-                        } else {
-                            chunkQueue = chunkQueue.filter(chunk => chunk.text_id !== "idle");
+                        // Only filter queue on transition start (new text_id) to avoid discarding required idle guard chunks
+                        if (data.text_id !== lastReceivedTextId) {
+                            if (data.transition_from !== undefined && data.transition_from !== null) {
+                                chunkQueue = chunkQueue.filter(chunk => {
+                                    if (chunk.text_id === "idle") {
+                                        return chunk.chunk_id <= data.transition_from;
+                                    }
+                                    return true;
+                                });
+                            } else {
+                                chunkQueue = chunkQueue.filter(chunk => chunk.text_id !== "idle");
+                            }
                         }
                     }
+                    lastReceivedTextId = data.text_id;
                     chunkQueue.push(data);
                     // Immediately try to schedule into audio context when a chunk arrives
                     if (audioCtx) scheduleNextChunks();
@@ -892,10 +897,10 @@
                 nextAudioStartTime = now + 0.05; // 50ms safety lead-in to avoid start-clipping
             }
             
-            // Schedule as many queued chunks as are ready (up to 4s of look-ahead)
+            // Schedule as many queued chunks as are ready (up to 2.0s of look-ahead)
             while (chunkQueue.length > 0) {
                 const nextStart = nextAudioStartTime;
-                if (nextStart - now > 4.0) break; // don't schedule too far ahead
+                if (nextStart - now > 2.0) break; // don't schedule too far ahead
                 
                 const chunk = chunkQueue.shift();
                 try {
@@ -932,8 +937,8 @@
                 }
             }
             
-            // Fallback: loop lastIdleChunk when disconnected and queue is empty
-            if (chunkQueue.length === 0 && scheduledChunks.length === 0 && !wsConnected && lastIdleChunk) {
+            // Fallback: loop lastIdleChunk when queue is empty to maintain breathing and avoid stuttering/buffering
+            if (chunkQueue.length === 0 && scheduledChunks.length === 0 && lastIdleChunk) {
                 chunkQueue.push(JSON.parse(JSON.stringify(lastIdleChunk)));
             }
         }

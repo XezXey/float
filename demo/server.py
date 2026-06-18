@@ -12,6 +12,7 @@ import numpy as np
 import cv2
 import torch
 from gtts import gTTS
+import edge_tts
 import librosa
 from pydantic import BaseModel
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Request, HTTPException
@@ -66,20 +67,12 @@ is_preparing_speech = False
 current_speech_text_id = None
 jpeg_encode_pool = ThreadPool(processes=8)
 
-# Global pipeline and state
-pipeline = None
-avatar_data = None
-active_connections = set()
-active_texts = {}
-is_preparing_speech = False
-current_speech_text_id = None
-jpeg_encode_pool = ThreadPool(processes=8)
-
 # History tracking for smooth idle -> talking transitions
 generated_chunks_history = {}
 chunk_counter = 0
 client_playing_chunk_id = None
-GUARD_CHUNKS = 2
+GUARD_CHUNKS = 0
+last_produced_text_id = "idle"
 
 # Setup templates
 templates = Jinja2Templates(directory="demo/templates")
@@ -92,13 +85,19 @@ def encode_frame_to_base64(frame_rgb):
     return base64.b64encode(jpeg.tobytes()).decode('utf-8')
 
 def text_to_speech_samples(text: str, sampling_rate=16000) -> np.ndarray:
-    """Generates audio samples for TTS using gTTS with robust local fallback."""
+    """Generates audio samples for TTS using edge-tts with robust local fallback."""
     try:
-        print(f"[TTS] Generating speech for text: '{text}' using gTTS...")
-        tts = gTTS(text=text, lang='en')
-        with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as fp:
-            temp_path = fp.name
-        tts.save(temp_path)
+        print(f"[TTS] Generating speech for text: '{text}' using edge-tts...")
+        
+        async def run_tts():
+            # Use Microsoft's en-US-GuyNeural high-quality male voice
+            communicate = edge_tts.Communicate(text, "en-US-GuyNeural")
+            with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as fp:
+                temp_path = fp.name
+            await communicate.save(temp_path)
+            return temp_path
+
+        temp_path = asyncio.run(run_tts())
         
         # Load MP3 file and resample to 16000Hz
         samples, sr = librosa.load(temp_path, sr=sampling_rate)
@@ -108,7 +107,7 @@ def text_to_speech_samples(text: str, sampling_rate=16000) -> np.ndarray:
             pass
         return samples
     except Exception as e:
-        print(f"[TTS Warning] gTTS generation failed or was blocked: {e}. Using local WAV fallback.")
+        print(f"[TTS Warning] edge-tts generation failed: {e}. Using local WAV fallback.")
         fallback_path = "assets/aud-sample-vs-1.wav"
         if os.path.exists(fallback_path):
             samples, sr = librosa.load(fallback_path, sr=sampling_rate)
@@ -123,7 +122,7 @@ def text_to_speech_samples(text: str, sampling_rate=16000) -> np.ndarray:
 
 def producer_thread_func():
     """Background daemon thread running the autoregressive inference loop."""
-    global avatar_data, pipeline, hidden_states, chunk_counter, client_playing_chunk_id, generated_chunks_history
+    global avatar_data, pipeline, hidden_states, chunk_counter, client_playing_chunk_id, generated_chunks_history, last_produced_text_id
     
     print("[Producer] Waiting for pipeline initialization...")
     while pipeline is None:
@@ -175,9 +174,16 @@ def producer_thread_func():
                 total_chunks = chunk.get('total_chunks', 1)
                 
                 # Check for transition guard at first chunk
-                if chunk_idx == 0 and client_playing_chunk_id is not None:
-                    target_chunk_id = client_playing_chunk_id + GUARD_CHUNKS
-                    if target_chunk_id in generated_chunks_history:
+                if chunk_idx == 0 and last_produced_text_id == "idle":
+                    target_chunk_id = None
+                    if client_playing_chunk_id is not None:
+                        target_chunk_id = client_playing_chunk_id + GUARD_CHUNKS
+                        if target_chunk_id not in generated_chunks_history:
+                            target_chunk_id = max(generated_chunks_history.keys()) if generated_chunks_history else None
+                    else:
+                        target_chunk_id = max(generated_chunks_history.keys()) if generated_chunks_history else None
+                    
+                    if target_chunk_id is not None and target_chunk_id in generated_chunks_history:
                         print(f"[Producer] Aligning transition: using hidden_states from idle chunk {target_chunk_id}")
                         hidden_states = {
                             'prev_x_t': generated_chunks_history[target_chunk_id]['prev_x_t'].clone().to(pipeline.opt.rank),
@@ -263,8 +269,14 @@ def producer_thread_func():
                 generated_chunks_history.pop(oldest, None)
             
         print(f"[Producer] Produced chunk {chunk_id} for text_id={text_id} (chunk_idx={chunk_idx}/{total_chunks}) - inf_time={inf_time*1000:.1f}ms")
-        if text_id != "idle":
+        # Only clear the frame buffer if we are interrupting an active talking segment
+        # to remove the unsent chunks of the old speech.
+        # If transitioning from idle, we do NOT clear the frame buffer so that the
+        # transition idle chunks (guard chunks) are preserved and sent to the client.
+        is_interrupting = (last_produced_text_id != "idle" and last_produced_text_id is not None)
+        if text_id != "idle" and text_id != last_produced_text_id and is_interrupting:
             frame_buffer.clear()
+        last_produced_text_id = text_id
         frame_buffer.put((base64_frames, audio_samples, text_id, chunk_idx, total_chunks, inf_time, mean_inf, chunk_id, transition_from))
             
         # Throttling: If the consumer is running slow and buffer starts piling up,
@@ -400,10 +412,20 @@ async def process_subsequent_sentences(sentences, text_id, emotion):
     except Exception as e:
         print(f"[Server Error] Background sentence processing failed: {e}")
 
+async def broadcast_control_message(action: str):
+    if active_connections:
+        message = {"type": "control", "action": action}
+        # Use list(active_connections) to avoid runtime errors due to size changing during iteration
+        for ws_conn in list(active_connections):
+            try:
+                await ws_conn.send_json(message)
+            except Exception as e:
+                print(f"[Server] Failed to send control message '{action}' to client: {e}")
+
 @app.post("/submit_text")
 async def submit_text(req: TextRequest):
     """Processes incoming text input, runs TTS on the first sentence synchronously to start playing immediately, and queues the rest in a background task."""
-    global is_preparing_speech, current_speech_text_id
+    global is_preparing_speech, current_speech_text_id, last_produced_text_id
     if avatar_data is None:
         raise HTTPException(status_code=400, detail="Avatar not initialized. Please upload a portrait first.")
         
@@ -415,6 +437,15 @@ async def submit_text(req: TextRequest):
         text_id = f"txt_{int(time.time() * 1000)}"
         current_speech_text_id = text_id
         active_texts[text_id] = req.text
+        
+        # Determine if avatar is currently talking to decide between interrupt and prepare_speech
+        is_talking = (last_produced_text_id != "idle" and last_produced_text_id is not None)
+        if is_talking:
+            print(f"[Server] Interrupting active speech '{last_produced_text_id}' with new speech '{text_id}'")
+            await broadcast_control_message("interrupt")
+        else:
+            print(f"[Server] Transitioning from idle. Preparing speech for '{text_id}'")
+            await broadcast_control_message("prepare_speech")
         
         # Clear pending audio queue
         while not pending_audio_queue.empty():

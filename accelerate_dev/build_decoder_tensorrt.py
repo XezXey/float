@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """
+[#] 17 June 2026
+====================================================================
 build_decoder_tensorrt.py
 ====================================================================
-Builds a TensorRT engine from the Synthesis Decoder ONNX model.
+Builds a TensorRT engine given FLOAT's Decoder ONNX model.
 Supports FP32, FP16, TF32, and FP8 precision modes.
 Configures dynamic batch profiles for all inputs.
 """
@@ -11,16 +13,19 @@ import os
 import argparse
 import tensorrt as trt
 import onnx
-
-parser = argparse.ArgumentParser(description="Build TensorRT engine from Synthesis Decoder ONNX model")
+from rich.console import Console
+console = Console()
+print = console.print
+    
+parser = argparse.ArgumentParser(description="Build TensorRT engine FLOAT's Decoder ONNX model")
 parser.add_argument(
-    "--onnx_path",
+    "--input_onnx_path",
     type=str,
     default="./onnx_models/float_decoder.onnx",
     help="Path to the decoder ONNX model file",
 )
 parser.add_argument(
-    "--engine_path",
+    "--output_engine_path",
     type=str,
     default="./trt_models/float_decoder.trt",
     help="Path to save the compiled TensorRT engine file/folder",
@@ -55,7 +60,9 @@ args = parser.parse_args()
 TRT_LOGGER = trt.Logger(trt.Logger.WARNING)
 
 def inspect_onnx_model(onnx_path):
-    print(f"Inspecting ONNX model at: {onnx_path}")
+    #NOTE: Checking the ONNX model's input shapes and types
+    print("=" * 100)
+    print(f"\[#] Inspecting ONNX model: {onnx_path}")
     model = onnx.load(onnx_path)
     dynamic = False
     for inp in model.graph.input:
@@ -67,47 +74,51 @@ def inspect_onnx_model(onnx_path):
                 shape.append(d.dim_param or -1)
                 dynamic = True
         print(f"  Input: '{inp.name}', shape: {shape}, dtype: {inp.type.tensor_type.elem_type}")
+    print("=" * 100)
     return dynamic
 
-def build_engine(onnx_path, engine_path=None, precision="fp32",
+def build_engine(input_onnx_path, output_engine_path=None, precision="fp32",
                  min_batch=1, opt_batch=1, max_batch=1):
 
-    is_dynamic = inspect_onnx_model(onnx_path)
+    is_dynamic = inspect_onnx_model(input_onnx_path)
 
+    #NOTE: Create builder, network, and parser
     with trt.Builder(TRT_LOGGER) as builder, \
          builder.create_network(1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH)) as network, \
          trt.OnnxParser(network, TRT_LOGGER) as parser:
 
         config = builder.create_builder_config()
         config.profiling_verbosity = trt.ProfilingVerbosity.DETAILED
+        #NOTE: Set memory pool limit: 4GB
         config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 4 << 30)
 
-        # Precision flags config
+        #NOTE: Precision flags config
+        print(f"\[#] Configuring precision mode: {precision}")
         if precision == "fp16":
             if builder.platform_has_fast_fp16:
                 config.set_flag(trt.BuilderFlag.FP16)
-                print("[#] FP16 precision enabled")
+                print("[green]\[#] FP16 precision enabled")
             else:
-                print("[!] FP16 warning: Platform does not support fast FP16 execution.")
+                print("[yellow]\[!] FP16 warning: Platform does not support fast FP16 execution.")
         elif precision == "tf32":
             config.set_flag(trt.BuilderFlag.TF32)
-            print("[#] TF32 precision enabled")
+            print("[green]\[#] TF32 precision enabled")
         elif precision == "fp8":
             config.set_flag(trt.BuilderFlag.FP8)
             config.set_flag(trt.BuilderFlag.FP16)
-            print("[#] FP8 precision enabled (with FP16 fallback)")
+            print("[green]\[#] FP8 precision enabled (with FP16 fallback)")
         else: # fp32
             config.clear_flag(trt.BuilderFlag.TF32)
-            print("[#] Strict FP32 precision enabled (TF32 disabled)")
+            print("[green]\[#] Strict FP32 precision enabled (TF32 disabled)")
 
-        with open(onnx_path, "rb") as f:
+        with open(input_onnx_path, "rb") as f:
             if not parser.parse(f.read()):
                 for i in range(parser.num_errors):
-                    print("Parser error:", parser.get_error(i))
+                    print(f"[red] \[!] Parser error: {parser.get_error(i)}")
                 return None
 
         if is_dynamic:
-            print(f"[#] Configuring dynamic optimization profile (min={min_batch}, opt={opt_batch}, max={max_batch})")
+            print(f"[green]\[#] Configuring dynamic optimization profile (min={min_batch}, opt={opt_batch}, max={max_batch})")
             profile = builder.create_optimization_profile()
             B_min, B_opt, B_max = min_batch, opt_batch, max_batch
 
@@ -122,24 +133,28 @@ def build_engine(onnx_path, engine_path=None, precision="fp32",
 
             config.add_optimization_profile(profile)
         else:
-            print("[#] Model has fully static input shapes. Skipping optimization profile.")
+            print(f"[yellow]\[#] Model has fully static input shapes. Skipping optimization profile.")
 
-        print("Building engine...")
-        serialized = builder.build_serialized_network(network, config)
+        # print(f"[green]\[#] Building engine...")
+        # serialized = builder.build_serialized_network(network, config)
+        with console.status("[green] Building engine...", spinner="dots"):
+            serialized = builder.build_serialized_network(network, config)
 
         if serialized is None:
-            print("ERROR: build failed")
+            print(f"[red]\[!] ERROR: build failed")
             return None
+        else:
+            print(f"[green]\[#] Successfully built TensorRT engine from ONNX model: {input_onnx_path}")
 
-        if engine_path:
-            # Check if engine_path is a directory or ends with a slash
-            if os.path.isdir(engine_path) or engine_path.endswith(('/', '\\')):
-                onnx_base = os.path.splitext(os.path.basename(onnx_path))[0]
+        if output_engine_path:
+            # Check if output_engine_path is a directory or ends with a slash
+            if os.path.isdir(output_engine_path) or output_engine_path.endswith(('/', '\\')):
+                onnx_base = os.path.splitext(os.path.basename(input_onnx_path))[0]
                 engine_filename = f"{onnx_base}_{precision}.trt"
-                engine_path = os.path.join(engine_path, engine_filename)
+                output_engine_path = os.path.join(output_engine_path, engine_filename)
             else:
-                dir_name = os.path.dirname(engine_path)
-                file_name = os.path.basename(engine_path)
+                dir_name = os.path.dirname(output_engine_path)
+                file_name = os.path.basename(output_engine_path)
                 base_name, ext = os.path.splitext(file_name)
                 
                 precision_suffix = f"_{precision}"
@@ -156,14 +171,16 @@ def build_engine(onnx_path, engine_path=None, precision="fp32",
 
             with open(engine_path, "wb") as f:
                 f.write(serialized)
-            print(f"Saved to {engine_path}")
+            print(f"[green]\[#] Saved to {engine_path}")
 
         return serialized
 
 def main():
+    print("=" * 100)
+    print(f"[bold cyan]\[#] Building TensorRT engine from ONNX model: {args.input_onnx_path}[/bold cyan]")
     build_engine(
-        args.onnx_path,
-        args.engine_path,
+        input_onnx_path=args.input_onnx_path,
+        output_engine_path=args.output_engine_path,
         precision=args.precision,
         min_batch=args.min_batch,
         opt_batch=args.opt_batch,

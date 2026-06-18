@@ -11,6 +11,9 @@ import os
 import sys
 import argparse
 import torch
+from rich.console import Console
+console = Console()
+print = console.print
 
 # Ensure the root folder is in the Python search path
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -23,7 +26,7 @@ from models.float_with_onnxruntime.FLOAT_ONNX import FLOAT
 
 class DecoderWrapper(torch.nn.Module):
     """
-    Wraps the Synthesis network to accept flattened features as individual inputs.
+    Wraps the Decoder network to accept flattened features as individual inputs.
     This guarantees clean tracing and ONNX export without dealing with lists of tensors.
     """
     def __init__(self, dec):
@@ -32,10 +35,8 @@ class DecoderWrapper(torch.nn.Module):
 
     def forward(self, wa, feat0, feat1, feat2, feat3, feat4, feat5, feat6):
         feats = [feat0, feat1, feat2, feat3, feat4, feat5, feat6]
-        # Run synthesis (discarding flow output since it's not used in generator.py decode_latent_into_image)
         img, _ = self.dec(wa, alpha=None, feats=feats)
         return img
-
 
 def main():
     parser = argparse.ArgumentParser(description="Export FLOAT Synthesis Decoder to ONNX format")
@@ -84,12 +85,12 @@ def main():
     output_path = os.path.join(args.output_dir, args.model_name)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
+    print(f"[cyan]\[#] Using device: {device}")
 
     # Load FLOAT model and copy state weights
-    print(f"Loading FLOAT model from: {opt.ckpt_path}")
+    print(f"[cyan]\[#] Loading FLOAT model from: {opt.ckpt_path}")
     if not os.path.isfile(opt.ckpt_path):
-        print(f"Error: Checkpoint file not found at '{opt.ckpt_path}'.")
+        print(f"[red]\[!] Error: Checkpoint file not found at '{opt.ckpt_path}'.")
         sys.exit(1)
 
     model = FLOAT(opt).to(device)
@@ -100,8 +101,10 @@ def main():
         for name, param in model.named_parameters():
             if name in state_dict:
                 param.copy_(state_dict[name])
+    
+    print(f"[green]\[#] Successfully loaded FLOAT model weights from: {opt.ckpt_path}")
 
-    # Monkey-patch ModulatedConv2d to avoid dynamic tracing issues with groups/batch dimensions
+    #NOTE: Modifying ModulatedConv2d to avoid dynamic tracing issues with groups/batch dimensions
     from models.float_with_onnxruntime.styledecoder import ModulatedConv2d
     from torch.nn import functional as F
 
@@ -142,8 +145,8 @@ def main():
     dec_wrapper = DecoderWrapper(model.motion_autoencoder.dec).to(device)
     dec_wrapper.eval()
 
-    # Generate dummy inputs
-    print("Generating dummy inputs...")
+    # Generate dummy inputs for the decoder
+    print(f"[cyan]\[#] Generating dummy inputs...")
     B = args.batch_size
     wa = torch.randn(B, 512, device=device)
     feat0 = torch.randn(B, 512, 8, 8, device=device)
@@ -161,11 +164,11 @@ def main():
 
     # The synthesis network (StyleGAN2-based) uses modulated convolutions with dynamic group-convolutions.
     # To export it to ONNX, we must use a fixed batch size of 1.
-    # Since the decoding pipeline (decode_latent_into_image) processes frame-by-frame (batch=1),
+    # Since the decoding pipeline (decode_latent_into_image) processes chunk-by-chunk (with batch=1),
     # a static batch size of 1 is perfectly suited and avoids shape-tracing errors.
     dynamic_axes = None
 
-    print(f"Exporting Synthesis Decoder to ONNX (opset_version={args.opset})...")
+    print(f"[cyan]\[#] Exporting Synthesis Decoder to ONNX (opset_version={args.opset})...")
     torch.onnx.export(
         dec_wrapper,
         dummy_inputs,
@@ -177,7 +180,7 @@ def main():
         output_names=output_names,
         dynamic_axes=dynamic_axes,
     )
-    print(f"Successfully exported ONNX decoder to: {output_path}")
+    print(f"[green]\[#] Successfully exported ONNX decoder to: {output_path}")
 
 
 if __name__ == "__main__":

@@ -287,9 +287,9 @@ class InferenceAgent:
 		self.data_processor = DataProcessor(opt)
 
 	def load_model(self) -> None:
-		trt_model_path = getattr(self.opt, 'trt_model_path', None)
+		trt_fmt_path = getattr(self.opt, 'trt_fmt_path', None)
 		trt_decoder_path = getattr(self.opt, 'trt_decoder_path', None)
-		self.G = FLOATWithTiming(self.opt, trt_model_path=trt_model_path, trt_decoder_path=trt_decoder_path)
+		self.G = FLOATWithTiming(self.opt, trt_model_path=trt_fmt_path, trt_decoder_path=trt_decoder_path)
 
 	def load_weight(self, checkpoint_path: str, rank: int) -> None:
 		state_dict = torch.load(checkpoint_path, map_location='cpu', weights_only=True)
@@ -360,7 +360,7 @@ class InferenceAgent:
 			r_cfg_scale = r_cfg_scale,
 			e_cfg_scale = e_cfg_scale,
 			emo 		= emo,
-			nfe			= nfe,
+			nfe			= 1,
 			seed		= seed
 		)['d_hat']
 		end_inf = time.time()
@@ -381,7 +381,7 @@ class InferenceOptions(BaseOptions):
 
 	def initialize(self, parser):
 		super().initialize(parser)
-		parser.add_argument("--trt_model_path",
+		parser.add_argument("--trt_fmt_path",
 				default=None, type=str, help="Path to the TensorRT model file for FMT (optional)")
 		parser.add_argument("--trt_decoder_path",
 				default=None, type=str, help="Path to the TensorRT decoder engine file (optional)")

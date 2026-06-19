@@ -137,9 +137,9 @@ def build_engine(input_onnx_path, output_engine_path=None, precision="fp32"):
 
 
 def main():
-    print("=" * 120)
-    print(pyfiglet.figlet_format("TensorRT for FLOAT's FMT", width=150))
-    print("=" * 120)
+    print("[green]" + "=" * 120)
+    print("[green]" + pyfiglet.figlet_format("TensorRT for FLOAT's FMT", width=150), end='')
+    print("[green]" + "=" * 120)
     print(f"[bold cyan]\[#] Building TensorRT engine from ONNX model: {args.input_onnx_path}[/bold cyan]")
     build_engine(
         input_onnx_path=args.input_onnx_path,

@@ -15,6 +15,7 @@ import sys
 import argparse
 import torch
 import warnings
+import pyfiglet
 from rich.console import Console
 console = Console()
 print = console.print
@@ -139,6 +140,6 @@ def main():
 
 if __name__ == "__main__":
     print("[green]" + "=" * 100)
-    print("[green]FLOAT's FMT ONNX Conversion...")
+    print("[green]" + pyfiglet.figlet_format("ONNX for FLOAT's FMT", width=120), end="")
     print("[green]" + "=" * 100)
     main()

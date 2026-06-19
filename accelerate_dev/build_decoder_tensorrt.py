@@ -152,9 +152,9 @@ def build_engine(input_onnx_path, output_engine_path=None, precision="fp32"):
         return serialized
 
 def main():
-    print("=" * 135)
-    print(pyfiglet.figlet_format("TensorRT for FLOAT's Decoder", width=150))
-    print("=" * 135)
+    print("[green]" + "=" * 135)
+    print("[green]" + pyfiglet.figlet_format("TensorRT for FLOAT's Decoder", width=150), end='')
+    print("[green]" + "=" * 135)
     print(f"[bold cyan]\[#] Building TensorRT engine from ONNX model: {args.input_onnx_path}[/bold cyan]")
     build_engine(
         input_onnx_path=args.input_onnx_path,

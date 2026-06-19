@@ -14,6 +14,7 @@ import sys
 import argparse
 import torch
 import warnings
+import pyfiglet
 from rich.console import Console
 console = Console()
 print = console.print
@@ -197,4 +198,7 @@ def main():
 
 
 if __name__ == "__main__":
+    print("[green]" + "=" * 120)
+    print("[green]" + pyfiglet.figlet_format("ONNX for FLOAT's Decoder", width=150), end="")
+    print("[green]" + "=" * 120)
     main()

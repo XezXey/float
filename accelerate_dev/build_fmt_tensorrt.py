@@ -19,13 +19,13 @@ print = console.print
 
 parser = argparse.ArgumentParser(description="Build TensorRT engine from ONNX model")
 parser.add_argument(
-    "--onnx_path",
+    "--input_onnx_path",
     type=str,
     default="accelerate_dev/float_fmt.onnx",
     help="Path to the ONNX model file",
 )
 parser.add_argument(
-    "--engine_path",
+    "--output_engine_path",
     type=str,
     default="accelerate_dev/float_fmt.engine",
     help="Path to save the compiled TensorRT engine file",
@@ -43,13 +43,17 @@ args = parser.parse_args()
 TRT_LOGGER = trt.Logger(trt.Logger.WARNING)
 
 def inspect_onnx_model(onnx_path):
+    #NOTE: Checking the ONNX model's input shapes and types
+    print("=" * 100)
+    print(f"\[#] Inspecting ONNX model: {onnx_path}")
     model = onnx.load(onnx_path)
     for inp in model.graph.input:
         shape = [d.dim_value if d.dim_value > 0 else d.dim_param 
                  for d in inp.type.tensor_type.shape.dim]
-        print(f"  name: {inp.name}, shape: {shape}, dtype: {inp.type.tensor_type.elem_type}")
+        print(f"  Input: '{inp.name}', shape: {shape}, dtype: {inp.type.tensor_type.elem_type}")
+    print("=" * 100)
 
-def build_engine(onnx_path, engine_path=None, precision="fp32",
+def build_engine(input_onnx_path, engine_path=None, precision="fp32",
                  min_batch=1, opt_batch=1, max_batch=4):
 
     with trt.Builder(TRT_LOGGER) as builder, \
@@ -61,60 +65,63 @@ def build_engine(onnx_path, engine_path=None, precision="fp32",
         config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 4 << 30)
 
         # Precision flags config
+        print(f"\[#] Configuring precision mode: {precision}")
         if precision == "fp16":
             if builder.platform_has_fast_fp16:
                 config.set_flag(trt.BuilderFlag.FP16)
-                print("[#] FP16 precision enabled")
+                print("[green]\[#] FP16 precision enabled")
             else:
-                print("[!] FP16 warning: Platform does not support fast FP16 execution.")
+                print("[yellow]\[!] FP16 warning: Platform does not support fast FP16 execution.")
         elif precision == "tf32":
             config.set_flag(trt.BuilderFlag.TF32)
-            print("[#] TF32 precision enabled")
+            print("[green]\[#] TF32 precision enabled")
         elif precision == "fp8":
             config.set_flag(trt.BuilderFlag.FP8)
             # # Enable FP16 as fallback for layers that don't support FP8
             config.set_flag(trt.BuilderFlag.FP16)
-            print("[#] FP8 precision enabled (with FP16 fallback)")
+            print("[green]\[#] FP8 precision enabled (with FP16 fallback)")
         else: # fp32
             # Clear default TF32 if strict FP32 is requested
             config.clear_flag(trt.BuilderFlag.TF32)
-            print("[#] Strict FP32 precision enabled (TF32 disabled)")
+            print("[green]\[#] Strict FP32 precision enabled (TF32 disabled)")
 
-        with open(onnx_path, "rb") as f:
+        with open(input_onnx_path, "rb") as f:
             if not parser.parse(f.read()):
                 for i in range(parser.num_errors):
-                    print("Parser error:", parser.get_error(i))
+                    print(f"[red] \[!] Parser error: {parser.get_error(i)}")
                 return None
 
         profile = builder.create_optimization_profile()
 
         # Fixed inputs (no dynamic dims — shape is already fully static)
-        profile.set_shape("t",          (1,),               (1,),               (1,))
-        profile.set_shape("a_cfg_scale",(1,),               (1,),               (1,))
-        profile.set_shape("e_cfg_scale",(1,),               (1,),               (1,))
+        # profile.set_shape("t",          (1,),               (1,),               (1,))
+        # profile.set_shape("a_cfg_scale",(1,),               (1,),               (1,))
+        # profile.set_shape("e_cfg_scale",(1,),               (1,),               (1,))
 
         # Dynamic batch inputs
-        B_min, B_opt, B_max = min_batch, opt_batch, max_batch
-        profile.set_shape("x",       (B_min, 50, 512),  (B_opt, 50, 512),  (B_max, 50, 512))
-        profile.set_shape("wa",      (B_min, 50, 512),  (B_opt, 50, 512),  (B_max, 50, 512))
-        profile.set_shape("wr",      (B_min, 512),      (B_opt, 512),      (B_max, 512))
-        profile.set_shape("we",      (B_min, 1, 7),     (B_opt, 1, 7),     (B_max, 1, 7))
-        profile.set_shape("prev_x",  (B_min, 10, 512),  (B_opt, 10, 512),  (B_max, 10, 512))
-        profile.set_shape("prev_wa", (B_min, 10, 512),  (B_opt, 10, 512),  (B_max, 10, 512))
+        # B_min, B_opt, B_max = min_batch, opt_batch, max_batch
+        # profile.set_shape("x",       (B_min, 50, 512),  (B_opt, 50, 512),  (B_max, 50, 512))
+        # profile.set_shape("wa",      (B_min, 50, 512),  (B_opt, 50, 512),  (B_max, 50, 512))
+        # profile.set_shape("wr",      (B_min, 512),      (B_opt, 512),      (B_max, 512))
+        # profile.set_shape("we",      (B_min, 1, 7),     (B_opt, 1, 7),     (B_max, 1, 7))
+        # profile.set_shape("prev_x",  (B_min, 10, 512),  (B_opt, 10, 512),  (B_max, 10, 512))
+        # profile.set_shape("prev_wa", (B_min, 10, 512),  (B_opt, 10, 512),  (B_max, 10, 512))
 
-        config.add_optimization_profile(profile)
+        # config.add_optimization_profile(profile)
 
-        print("Building engine...")
-        serialized = builder.build_serialized_network(network, config)
+        with console.status("[green] Building engine...", spinner="dots"):
+            serialized = builder.build_serialized_network(network, config)
 
         if serialized is None:
-            print("ERROR: build failed")
+            print(f"[red]\[!] ERROR: build failed")
             return None
+        else:
+            print(f"[green]\[#] Successfully built TensorRT engine from ONNX model: {input_onnx_path}")
 
         if engine_path:
             # Check if engine_path is a directory or ends with a slash
             if os.path.isdir(engine_path) or engine_path.endswith(('/', '\\')):
-                onnx_base = os.path.splitext(os.path.basename(onnx_path))[0]
+                onnx_base = os.path.splitext(os.path.basename(input_onnx_path))[0]
                 engine_filename = f"{onnx_base}_{precision}.trt"
                 engine_path = os.path.join(engine_path, engine_filename)
             else:
@@ -144,5 +151,5 @@ def build_engine(onnx_path, engine_path=None, precision="fp32",
 # Parse and override precision with backward compatibility flag
 precision = args.precision
 
-inspect_onnx_model(args.onnx_path)
-serialized_engine = build_engine(args.onnx_path, args.engine_path, precision=precision)
+inspect_onnx_model(args.input_onnx_path)
+serialized_engine = build_engine(args.input_onnx_path, args.output_engine_path, precision=precision)

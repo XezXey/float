@@ -51,3 +51,4 @@ experiment/tensorrt_res
 experiment/tensorrt/
 experiment/integrate_student/
 experiment/misc/
+test_before_released/

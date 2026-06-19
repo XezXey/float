@@ -14,6 +14,7 @@ import os
 import sys
 import argparse
 import torch
+import warnings
 from rich.console import Console
 console = Console()
 print = console.print
@@ -30,13 +31,6 @@ def main():
     parser = argparse.ArgumentParser(description="Export FLOAT FlowMatchingTransformer (FMT) to ONNX format")
     
     # Model and input options
-    parser.add_argument(
-        "--quantize",
-        action="store_true",
-        default=False,
-        help="Whether to perform post-export quantization to int8 using ONNX Runtime's quantization tools."
-    )
-    
     parser.add_argument(
         "--ckpt_path",
         type=str,
@@ -68,16 +62,6 @@ def main():
         help="Batch size for the dummy inputs during export",
     )
     parser.add_argument(
-        "--disable-constant-folding",
-        action="store_true",
-        help="Disable constant folding optimization during export",
-    )
-    parser.add_argument(
-        "--no-dynamic",
-        action="store_true",
-        help="Disable dynamic batch size dimensions",
-    )
-    parser.add_argument(
         "--verbose",
         action="store_true",
         default=False,
@@ -87,6 +71,10 @@ def main():
     # Add default options from the base FLOAT model arguments
     parser = add_model_args(parser)
     args = parser.parse_args()
+    if not args.verbose:
+        from torch.jit import TracerWarning
+        warnings.filterwarnings("ignore", category=UserWarning)
+        warnings.filterwarnings("ignore", category=TracerWarning)
     
     # Initialize rank and ngpus as required by FlowMatchingTransformer device placements
     args.rank = 0 if torch.cuda.is_available() else "cpu"
@@ -96,17 +84,17 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
     output_path = os.path.join(args.output_dir, args.model_name)
 
-    # 1. Device selection
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
+    print(f"[cyan]\[#] Using device: {device}")
 
     # 2. Load the FMT model wrapper
     print(f"Loading FMT model from checkpoint: {args.ckpt_path}")
     if not os.path.isfile(args.ckpt_path):
-        print(f"Error: Checkpoint file not found at '{args.ckpt_path}'. Please make sure float.pth exists.")
+        print(f"[red]\[!] Error: Checkpoint file not found at '{args.ckpt_path}'.")
         sys.exit(1)
         
     fmt_wrapper = load_fmt_wrapper(args, device)
+    print(f"[green]\[#] Successfully loaded FLOAT model weights from: {args.ckpt_path}")
     
     # 3. Create dummy inputs matching the FMTWrapper forward signature
     # Signature: forward(t, x, wa, wr, we, prev_x, prev_wa)
@@ -130,58 +118,27 @@ def main():
     output_names = ["output"]
 
     dynamic_axes = None
-    if not args.no_dynamic:
-        # We make the batch dimension dynamic for all tensor inputs and outputs.
-        # Note: 't' represents the scalar timestep and has shape (1,), so we do not make it dynamic.
-        dynamic_axes = {
-            "x": {0: "batch_size"},
-            "wa": {0: "batch_size"},
-            "wr": {0: "batch_size"},
-            "we": {0: "batch_size"},
-            "prev_x": {0: "batch_size"},
-            "prev_wa": {0: "batch_size"},
-            "output": {0: "batch_size"},
-        }
-        print("Dynamic batch axis enabled for all tensor inputs and outputs.")
-
-    do_constant_folding = not args.disable_constant_folding
+    # do_constant_folding = not args.disable_constant_folding
 
     # 5. Perform ONNX export
-    print(f"Exporting model to ONNX format (opset_version={args.opset})...")
+    print(f"[cyan]\[#] Exporting FLOAT's FMT into ONNX format (opset_version={args.opset})...")
     torch.onnx.export(
         fmt_wrapper,
         dummy_inputs,
         output_path,
         export_params=True,
         opset_version=args.opset,
-        do_constant_folding=do_constant_folding,
+        do_constant_folding=True,
         input_names=input_names,
         output_names=output_names,
         dynamic_axes=dynamic_axes,
     )
     
-    # 6. Quantize (optional, controlled by a flag)
-    if args.quantize:
-        from onnxruntime.quantization import quantize_dynamic, QuantType
-        from onnxruntime.quantization.shape_inference import quant_pre_process
-        from pathlib import Path
-
-        pre_path = Path(output_path).stem + "_preprocessed.onnx"
-        quant_path = Path(output_path).stem + "_int8.onnx"
-
-        print("Pre-processing for quantization...")
-        quant_pre_process(output_path, pre_path)
-        
-        print("Quantizing...")
-        quantize_dynamic(
-            model_input=pre_path,
-            model_output=quant_path,
-            weight_type=QuantType.QInt8,
-        )
-        print(f"Quantized model saved → {quant_path}")
-        
-        print(f"Successfully exported ONNX model to: {output_path}")
+    print(f"[green]\[#] Successfully exported ONNX FMT to: {output_path}")
 
 
 if __name__ == "__main__":
+    print("[green]" + "=" * 100)
+    print("[green]FLOAT's FMT ONNX Conversion...")
+    print("[green]" + "=" * 100)
     main()

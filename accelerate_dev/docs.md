@@ -2,11 +2,14 @@
 
 This guide provides instructions for accelerating the **FLOAT** talking-head model inference pipeline using **NVIDIA TensorRT**. 
 
-By converting the PyTorch checkpoints into optimized TensorRT engines, you can achieve significant speedups for both the **Flow-Matching Transformer (FMT)** and the **Synthesis Decoder**.
+By converting the PyTorch checkpoints into optimized TensorRT engines, you can achieve significant speedups for both the **FLOAT's FMT (Flow-Matching Transformer)** and the **FLOAT's Decoder**.
 
 ---
 
 ## Prerequisites & Setup
+
+### 0. FLOAT's environment Setup
+Please finish the install of FLOAT[https://github.com/deepbrainai-research/float]
 
 ### 1. Environment Setup
 Install the required packages for ONNX export and TensorRT compilation:
@@ -15,7 +18,7 @@ Install the required packages for ONNX export and TensorRT compilation:
 pip install -r ./accelerate_dev/requirements_tensorrt.txt
 ```
 
-### 2. Tested System Configuration
+### NOTE: Tested System Configuration
 The scripts have been verified on the following hardware and software stack:
 * **GPU:** NVIDIA GeForce RTX 3090 (24GB)
 * **Driver Version:** 560.35.03
@@ -36,47 +39,54 @@ graph TD
     A[float.pth Checkpoint] -->|export_decoder_onnx.py| B[float_decoder.onnx]
     A -->|export_fmt_onnx.py| C[float_fmt.onnx]
     B -->|build_decoder_tensorrt.py| D[float_decoder_precision.trt]
-    C -->|build_fmt_tensorrt.py| E[float_fmt_precision.trt]
-    D -->|generate_with_tensorrt.py| F[Accelerated Video Output]
-    E -->|generate_with_tensorrt.py| F
+    C -->|build_fmt_tensorrt.py| E[float_fmt.trt]
+    D -->|generate_with_decoder_tensorrt.py Support inference only teacher model with/without tensorrt decoder | F[Video Output]
+    E -->|generate_with_student_tensorrt.py Support inference on student model with/without tensorrt decoder | F
 ```
 
 ---
 
 ## Step 1: Export Checkpoints to ONNX
 
-The model is split into two components for export: the **Synthesis Decoder** and the **Flow Matching Transformer (FMT)**.
+The model is split into two components for export: the **FLOAT's Decoder** and the **FLOAT's FMT**.
 
-### 1. Export the Synthesis Decoder
+### 1. Export the FLOAT's Decoder
 ```bash
 python ./accelerate_dev/export_decoder_onnx.py \
-  --ckpt_path ./checkpoints/float.pth \
-  --output_dir ./onnx_models \
-  --model_name float_decoder.onnx \
+  --ckpt_path <path_to_ckpt> \
+  --output_dir <output_dir> \
+  --model_name <model_name> \
   --opset 17
 ```
 
-### 2. Export the Flow Matching Transformer (FMT)
+### 2. Export the FLOAT's FMT (Flow Matching Transformer)
 ```bash
 python ./accelerate_dev/export_fmt_onnx.py \
-  --ckpt_path ./checkpoints/float.pth \
-  --output_dir ./onnx_models \
-  --model_name float_fmt.onnx \
+  --ckpt_path <path_to_ckpt> \
+  --output_dir <output_dir> \
+  --model_name <model_name> \
   --opset 17
 ```
+
+Example:
+- Convert FLOAT's FMT into ONNX
+python ./accelerate_dev/export_fmt_onnx.py --output_dir ./test_released/fmt/ --model_name float_fmt.onnx --ckpt_path ./checkpoints/float.pth
+
+- Convert FLOAT's FMT student into ONNX
+python ./accelerate_dev/export_fmt_onnx.py --output_dir ./test_released/fmt/ --model_name float_fmt_student.onnx --ckpt_path ./checkpoints/student_fmt_distill/student_fmt_best_earlystop.pt
+
 
 ### Command Line Arguments for Export Scripts
 
 | Argument | Description | Default |
 | :--- | :--- | :--- |
 | `--ckpt_path` | Path to the PyTorch checkpoint file (`.pth` or `.pt`). | `./checkpoints/float.pth` |
-| `--output_dir` | Directory to save the exported ONNX model. | `onnx_models` (Decoder) / `accelerate_dev` (FMT) |
-| `--model_name` | Name of the exported ONNX model file. | `float_decoder.onnx` / `float_fmt.onnx` |
-| `--opset` | ONNX operator set version (Opset 17 is recommended for newer operations). | `17` |
+| `--output_dir` | Directory to save the exported ONNX model. | `onnx_models` (Decoder) |
+| `--model_name` | Name of the exported ONNX model file. | `float_decoder.onnx` / `float_fmt.onnx` / `float_fmt_student.onnx` |
+| `--opset` | ONNX operator set version (Opset 17 is relatively new and enough for newer operation recommended for newer operations). | `17` |
 | `--batch-size` | Batch size for dummy inputs during tracing. Keep fixed to 1. | `1` |
 | `--verbose` | Enable verbose logging during export. | `False` |
-| `--quantize` | *(FMT only)* Perform post-export INT8 quantization using ONNX Runtime. | `False` |
-| `--no-dynamic` | *(FMT only)* Disable dynamic batch size dimensions. | `False` |
+
 
 ---
 

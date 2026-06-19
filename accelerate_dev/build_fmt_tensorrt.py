@@ -13,6 +13,7 @@ import tensorrt as trt
 import argparse
 import onnx
 import os
+import pyfiglet
 from rich.console import Console
 console = Console()
 print = console.print
@@ -53,9 +54,11 @@ def inspect_onnx_model(onnx_path):
         print(f"  Input: '{inp.name}', shape: {shape}, dtype: {inp.type.tensor_type.elem_type}")
     print("=" * 100)
 
-def build_engine(input_onnx_path, engine_path=None, precision="fp32",
-                 min_batch=1, opt_batch=1, max_batch=4):
+def build_engine(input_onnx_path, output_engine_path=None, precision="fp32"):
 
+    inspect_onnx_model(input_onnx_path)
+    
+    #NOTE: Create builder, network, and parser
     with trt.Builder(TRT_LOGGER) as builder, \
          builder.create_network(1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH)) as network, \
          trt.OnnxParser(network, TRT_LOGGER) as parser:
@@ -91,24 +94,8 @@ def build_engine(input_onnx_path, engine_path=None, precision="fp32",
                     print(f"[red] \[!] Parser error: {parser.get_error(i)}")
                 return None
 
-        profile = builder.create_optimization_profile()
-
-        # Fixed inputs (no dynamic dims — shape is already fully static)
-        # profile.set_shape("t",          (1,),               (1,),               (1,))
-        # profile.set_shape("a_cfg_scale",(1,),               (1,),               (1,))
-        # profile.set_shape("e_cfg_scale",(1,),               (1,),               (1,))
-
-        # Dynamic batch inputs
-        # B_min, B_opt, B_max = min_batch, opt_batch, max_batch
-        # profile.set_shape("x",       (B_min, 50, 512),  (B_opt, 50, 512),  (B_max, 50, 512))
-        # profile.set_shape("wa",      (B_min, 50, 512),  (B_opt, 50, 512),  (B_max, 50, 512))
-        # profile.set_shape("wr",      (B_min, 512),      (B_opt, 512),      (B_max, 512))
-        # profile.set_shape("we",      (B_min, 1, 7),     (B_opt, 1, 7),     (B_max, 1, 7))
-        # profile.set_shape("prev_x",  (B_min, 10, 512),  (B_opt, 10, 512),  (B_max, 10, 512))
-        # profile.set_shape("prev_wa", (B_min, 10, 512),  (B_opt, 10, 512),  (B_max, 10, 512))
-
-        # config.add_optimization_profile(profile)
-
+        print(f"[yellow]\[#] Using the static batch size = 1 (for autoregressive generation).")
+        
         with console.status("[green] Building engine...", spinner="dots"):
             serialized = builder.build_serialized_network(network, config)
 
@@ -118,16 +105,16 @@ def build_engine(input_onnx_path, engine_path=None, precision="fp32",
         else:
             print(f"[green]\[#] Successfully built TensorRT engine from ONNX model: {input_onnx_path}")
 
-        if engine_path:
-            # Check if engine_path is a directory or ends with a slash
-            if os.path.isdir(engine_path) or engine_path.endswith(('/', '\\')):
+        if output_engine_path:
+            # Check if output_engine_path is a directory or ends with a slash
+            if os.path.isdir(output_engine_path) or output_engine_path.endswith(('/', '\\')):
                 onnx_base = os.path.splitext(os.path.basename(input_onnx_path))[0]
                 engine_filename = f"{onnx_base}_{precision}.trt"
-                engine_path = os.path.join(engine_path, engine_filename)
+                save_engine_path = os.path.join(output_engine_path, engine_filename)
             else:
                 # It is a filename. Check if user already specified '_<precision>' in the base filename
-                dir_name = os.path.dirname(engine_path)
-                file_name = os.path.basename(engine_path)
+                dir_name = os.path.dirname(output_engine_path)
+                file_name = os.path.basename(output_engine_path)
                 base_name, ext = os.path.splitext(file_name)
                 
                 precision_suffix = f"_{precision}"
@@ -135,21 +122,30 @@ def build_engine(input_onnx_path, engine_path=None, precision="fp32",
                     base_name = f"{base_name}_{precision}"
                     ext = ".trt"
                 
-                engine_path = os.path.join(dir_name, f"{base_name}{ext}")
+                save_engine_path = os.path.join(dir_name, f"{base_name}{ext}")
 
             # Ensure parent directories exist
-            parent_dir = os.path.dirname(engine_path)
+            parent_dir = os.path.dirname(save_engine_path)
             if parent_dir:
                 os.makedirs(parent_dir, exist_ok=True)
 
-            with open(engine_path, "wb") as f:
+            with open(save_engine_path, "wb") as f:
                 f.write(serialized)
-            print(f"Saved to {engine_path}")
+            print(f"[green]\[#] Saved to {save_engine_path}")
 
         return serialized
 
-# Parse and override precision with backward compatibility flag
-precision = args.precision
 
-inspect_onnx_model(args.input_onnx_path)
-serialized_engine = build_engine(args.input_onnx_path, args.output_engine_path, precision=precision)
+def main():
+    print("=" * 120)
+    print(pyfiglet.figlet_format("TensorRT for FLOAT's FMT", width=150))
+    print("=" * 120)
+    print(f"[bold cyan]\[#] Building TensorRT engine from ONNX model: {args.input_onnx_path}[/bold cyan]")
+    build_engine(
+        input_onnx_path=args.input_onnx_path,
+        output_engine_path=args.output_engine_path,
+        precision=args.precision
+    )
+
+if __name__ == "__main__":
+    main()

@@ -18,6 +18,9 @@ from torchdiffeq import odeint
 
 import time
 import rich
+from rich.console import Console
+console = Console()
+print = console.print
 from tqdm import tqdm
 from pathlib import Path
 from transformers import Wav2Vec2FeatureExtractor
@@ -182,9 +185,9 @@ class FLOATWithTiming(FLOAT):
 		data_out = self.decode_latent_into_image(s_r = s_r, s_r_feats = s_r_feats, r_d = sample)
 
 		# Print chunk-wise timing summary
-		print("\n" + "="*50)
+		print("\n[bold magenta]" + "="*50)
 		print("          CHUNK-WISE RUNTIME SUMMARY          ")
-		print("="*50)
+		print("="*50 + "[/bold magenta]")
 		total_chunks = len(self.chunk_generation_times)
 		totals = []
 		for c in range(total_chunks):
@@ -192,11 +195,11 @@ class FLOATWithTiming(FLOAT):
 			dec_t = self.chunk_decoding_times[c] if c < len(self.chunk_decoding_times) else 0.0
 			chunk_total = gen_t + dec_t
 			totals.append(chunk_total)
-			print(f"Chunk {c:02d}:")
-			print(f"  - Generation Time: {gen_t:.4f} seconds")
-			print(f"  - Decoding Time:   {dec_t:.4f} seconds")
-			print(f"  - Total Time:      {chunk_total:.4f} seconds")
-		print("-"*50)
+			print(f"[bold green]Chunk {c:02d}:[/bold green]")
+			print(f"  - Generation Time: [yellow]{gen_t:.4f}[/yellow] seconds")
+			print(f"  - Decoding Time:   [yellow]{dec_t:.4f}[/yellow] seconds")
+			print(f"  - Total Time:      [green]{chunk_total:.4f}[/green] seconds")
+		print("[magenta]" + "-"*50 + "[/magenta]")
 		if total_chunks > 0:
 			mean_gen = np.mean(self.chunk_generation_times)
 			std_gen = np.std(self.chunk_generation_times)
@@ -204,11 +207,11 @@ class FLOATWithTiming(FLOAT):
 			std_dec = np.std(self.chunk_decoding_times)
 			mean_tot = np.mean(totals)
 			std_tot = np.std(totals)
-			print(f"Statistics across {total_chunks} chunks:")
-			print(f"  - Generation Time: {mean_gen:.4f} ± {std_gen:.4f} seconds")
-			print(f"  - Decoding Time:   {mean_dec:.4f} ± {std_dec:.4f} seconds")
-			print(f"  - Total Time:      {mean_tot:.4f} ± {std_tot:.4f} seconds")
-		print("="*50 + "\n")
+			print(f"[bold]Statistics across {total_chunks} chunks:[/bold]")
+			print(f"  - Generation Time: [yellow]{mean_gen:.4f}[/yellow] ± {std_gen:.4f} seconds")
+			print(f"  - Decoding Time:   [yellow]{mean_dec:.4f}[/yellow] ± {std_dec:.4f} seconds")
+			print(f"  - Total Time:      [green]{mean_tot:.4f}[/green] ± {std_tot:.4f} seconds")
+		print("[bold magenta]" + "="*50 + "[/bold magenta]\n")
 
 		return data_out
 
@@ -299,7 +302,7 @@ class InferenceAgent:
 					model_param.copy_(state_dict[model_name].to(rank))
 				elif "wav2vec2" in model_name: pass
 				else:
-					print(f"! Warning; {model_name} not found in state_dict.")
+					print(f"[bold yellow]! Warning; {model_name} not found in state_dict.[/bold yellow]")
 
 		del state_dict
   
@@ -312,7 +315,7 @@ class InferenceAgent:
 			vid = ((vid + 1) / 2 * 255).type('torch.ByteTensor')
 			torchvision.io.write_video(temp_filename, vid, fps=self.opt.fps)			
 			if audio_path is not None:
-				print("FOUND AUDIO")
+				print("[bold green]FOUND AUDIO[/bold green]")
 				
 				with open(os.devnull, 'wb') as f:
 					out_name = f'seed={self.opt.seed}_{os.path.basename(self.opt.ref_path).split(".")[0]}_with_{os.path.basename(self.opt.aud_path).split(".")[0]}.mp4'
@@ -341,7 +344,7 @@ class InferenceAgent:
 	) -> str:
 
 		data = self.data_processor.preprocess(ref_path, audio_path, no_crop = no_crop)
-		if verbose: print(f"> [Done] Preprocess.")
+		if verbose: print(f"[green]> [Done] Preprocess.[/green]")
 
 		# Determine labeling for printouts
 		run_mode = "PyTorch"
@@ -364,14 +367,14 @@ class InferenceAgent:
 			seed		= seed
 		)['d_hat']
 		end_inf = time.time()
-		print(f"> [#{run_mode}] Inference completed () in {end_inf - start_inf:.2f} seconds.")
-		print(f"> [#{run_mode}] Inference FPS = {d_hat.shape[0] / (end_inf - start_inf):.2f} frames/sec.")
+		print(f"[cyan]> [#{run_mode}] Inference completed () in [bold]{end_inf - start_inf:.2f}[/bold] seconds.[/cyan]")
+		print(f"[cyan]> [#{run_mode}] Inference FPS = [bold]{d_hat.shape[0] / (end_inf - start_inf):.2f}[/bold] frames/sec.[/cyan]")
 
 		start_save = time.time()
 		res_video_path = self.save_video(d_hat, res_video_path, audio_path)
 		end_save = time.time()
-		print(f"> [#{run_mode}] Video saving completed in {end_save - start_save:.2f} seconds.")
-		print(f"> [Done] result saved at {res_video_path}")
+		print(f"[cyan]> [#{run_mode}] Video saving completed in [bold]{end_save - start_save:.2f}[/bold] seconds.[/cyan]")
+		print(f"[green]> [Done] result saved at {res_video_path}[/green]")
 		return res_video_path, {'n_frames': d_hat.shape[0], 'mode': run_mode}
 
 
@@ -442,8 +445,8 @@ if __name__ == '__main__':
 			)
 		end = time.time()
 		run_mode = misc.get('mode', 'UNKNOWN')
-		print(f"> [#{run_mode}] Total execution (Preprocess + {run_mode} + Save) time: {end - start:.2f} seconds.")
-		print(f"> [#{run_mode}] Total execution FPS = {misc['n_frames'] / (end - start):.2f} frames/sec.")
+		print(f"[bold green]> [#{run_mode}] Total execution (Preprocess + {run_mode} + Save) time: {end - start:.2f} seconds.[/bold green]")
+		print(f"[bold green]> [#{run_mode}] Total execution FPS = {misc['n_frames'] / (end - start):.2f} frames/sec.[/bold green]")
 	finally:
 		if getattr(agent.G, 'context', None) is not None:
 			agent.G.context.pop()  # Clean up CUDA context after all done

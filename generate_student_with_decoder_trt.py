@@ -13,6 +13,9 @@ import math
 from tqdm import tqdm
 from pathlib import Path
 import sys
+from rich.console import Console
+console = Console()
+print = console.print
 
 # Import models/float from main repo first to initialize its path
 import models
@@ -44,10 +47,10 @@ class StudentFLOATWithTRTDecoder(StudentFLOAT):
 		self.trt_dec_inferencer = None
 		
 		if trt_decoder_path is not None:
-			print("#" * 100)
-			print(f"[#] Initializing TensorRT Decoder session with model: {trt_decoder_path}")
+			print("[cyan]" + "#" * 100 + "[/cyan]")
+			print(f"[cyan]\[#] Initializing TensorRT Decoder session with model: {trt_decoder_path}[/cyan]")
 			self.init_trt_decoder(trt_decoder_path)
-			print("#" * 100)
+			print("[cyan]" + "#" * 100 + "[/cyan]")
 
 	def init_trt_decoder(self, trt_decoder_path: str):
 		try:
@@ -61,7 +64,7 @@ class StudentFLOATWithTRTDecoder(StudentFLOAT):
 
 	@torch.no_grad()
 	def warmup_trt_decoder(self):
-		print("[#TENSORRT] Warming up TensorRT Decoder engine with dummy inputs...")
+		print("[yellow]\[#TENSORRT] Warming up TensorRT Decoder engine with dummy inputs...[/yellow]")
 		B = 1
 		wa = torch.randn(B, 512).to(device=self.opt.rank, dtype=torch.float32)
 		feat0 = torch.randn(B, 512, 8, 8).to(device=self.opt.rank, dtype=torch.float32)
@@ -74,7 +77,7 @@ class StudentFLOATWithTRTDecoder(StudentFLOAT):
 		feats = [feat0, feat1, feat2, feat3, feat4, feat5, feat6]
 		for _ in range(10):
 			_ = self.forward_decoder_tensorrt(wa, feats)
-		print("[#TENSORRT] Decoder warmup completed.")
+		print("[green]\[#TENSORRT] Decoder warmup completed.[/green]")
 
 	@torch.no_grad()
 	def forward_decoder_tensorrt(self, wa, feats):
@@ -193,16 +196,16 @@ class StudentFLOATWithTRTDecoder(StudentFLOAT):
 				)
 			
 			sample_t = x0 + v_pred[:, self.num_prev_frames:]
-			print("Chunk shape: ", sample_t.shape)
+			# print("Chunk shape: ", sample_t.shape)
 			sample.append(sample_t)
 			torch.cuda.synchronize()
 			end_inference_time = time.time()
 			gen_t_duration = end_inference_time - start_inference_time
 			self.chunk_generation_times.append(gen_t_duration)
 			total_fmt_inference_time += gen_t_duration
-			print(f"[#STUDENT] Inference completed for clip {t} in {gen_t_duration:.3f} seconds.")
+			print(f"[cyan]\[#STUDENT] Inference completed for clip {t} in [bold]{gen_t_duration:.3f}[/bold] seconds.[/cyan]")
    
-		print(f"Total sampling time for all clips: {time.time() - start_GenVideo_time:.6f} seconds.")
+		print(f"[bold cyan]Total sampling time for all clips: {time.time() - start_GenVideo_time:.6f} seconds.[/bold cyan]")
 		sample = torch.cat(sample, dim=1)[:, :T]
 		return sample
 
@@ -233,9 +236,9 @@ class StudentFLOATWithTRTDecoder(StudentFLOAT):
 		data_out = self.decode_latent_into_image(s_r = s_r, s_r_feats = s_r_feats, r_d = sample)
 
 		# Print chunk-wise timing summary
-		print("\n" + "="*50)
+		print("\n[bold magenta]" + "="*50)
 		print("          CHUNK-WISE RUNTIME SUMMARY          ")
-		print("="*50)
+		print("="*50 + "[/bold magenta]")
 		total_chunks = len(self.chunk_generation_times)
 		totals = []
 		for c in range(total_chunks):
@@ -243,11 +246,11 @@ class StudentFLOATWithTRTDecoder(StudentFLOAT):
 			dec_t = self.chunk_decoding_times[c] if c < len(self.chunk_decoding_times) else 0.0
 			chunk_total = gen_t + dec_t
 			totals.append(chunk_total)
-			print(f"Chunk {c:02d}:")
-			print(f"  - Generation Time: {gen_t:.4f} seconds")
-			print(f"  - Decoding Time:   {dec_t:.4f} seconds")
-			print(f"  - Total Time:      {chunk_total:.4f} seconds")
-		print("-"*50)
+			print(f"[bold green]Chunk {c:02d}:[/bold green]")
+			print(f"  - Generation Time: [yellow]{gen_t:.4f}[/yellow] seconds")
+			print(f"  - Decoding Time:   [yellow]{dec_t:.4f}[/yellow] seconds")
+			print(f"  - Total Time:      [green]{chunk_total:.4f}[/green] seconds")
+		print("[magenta]" + "-"*50 + "[/magenta]")
 		if total_chunks > 0:
 			mean_gen = np.mean(self.chunk_generation_times)
 			std_gen = np.std(self.chunk_generation_times)
@@ -255,11 +258,11 @@ class StudentFLOATWithTRTDecoder(StudentFLOAT):
 			std_dec = np.std(self.chunk_decoding_times)
 			mean_tot = np.mean(totals)
 			std_tot = np.std(totals)
-			print(f"Statistics across {total_chunks} chunks:")
-			print(f"  - Generation Time: {mean_gen:.4f} ± {std_gen:.4f} seconds")
-			print(f"  - Decoding Time:   {mean_dec:.4f} ± {std_dec:.4f} seconds")
-			print(f"  - Total Time:      {mean_tot:.4f} ± {std_tot:.4f} seconds")
-		print("="*50 + "\n")
+			print(f"[bold]Statistics across {total_chunks} chunks:[/bold]")
+			print(f"  - Generation Time: [yellow]{mean_gen:.4f}[/yellow] ± {std_gen:.4f} seconds")
+			print(f"  - Decoding Time:   [yellow]{mean_dec:.4f}[/yellow] ± {std_dec:.4f} seconds")
+			print(f"  - Total Time:      [green]{mean_tot:.4f}[/green] ± {std_tot:.4f} seconds")
+		print("[bold magenta]" + "="*50 + "[/bold magenta]\n")
 
 		return data_out
 
@@ -273,7 +276,7 @@ class InferenceAgent:
 		# Load Model
 		self.load_model()
 		
-		print(f"Loading distilled weights from {opt.ckpt_path} for student model inference.")
+		print(f"[cyan]Loading distilled weights from [bold]{opt.ckpt_path}[/bold] for student model inference.[/cyan]")
 		load_distilled_weight(self.G, opt.ckpt_path, opt.rank)
 		
 		self.G.to(self.rank)
@@ -304,12 +307,12 @@ class InferenceAgent:
 			vid = ((vid + 1) / 2 * 255).type('torch.ByteTensor')
 			torchvision.io.write_video(temp_filename, vid, fps=self.opt.fps)			
 			if audio_path is not None:
-				print(f"Merging audio with video using FFmpeg into {out_file_path}...")
+				print(f"[cyan]Merging audio with video using FFmpeg into [bold]{out_file_path}[/bold]...[/cyan]")
 				with open(os.devnull, 'wb') as f:
 					command = f"ffmpeg -i {temp_filename} -i {audio_path} -c:v copy -c:a aac {out_file_path} -y"
 					subprocess.call(command, shell=True, stdout=f, stderr=f)
 			else:
-				print(f"Saving video without audio to {out_file_path}...")
+				print(f"[cyan]Saving video without audio to [bold]{out_file_path}[/bold]...[/cyan]")
 				import shutil
 				shutil.move(temp_filename, out_file_path)
 		finally:
@@ -333,7 +336,7 @@ class InferenceAgent:
 	) -> tuple:
 
 		data = self.data_processor.preprocess(ref_path=ref_path, audio_path=audio_path, no_crop = no_crop)
-		if verbose: print(f"> [Done] Preprocess.")
+		if verbose: print(f"[green]> [Done] Preprocess.[/green]")
 
 		run_mode = "Student_PyTorch" if self.G.trt_dec_inferencer is None else "Student_TRT_Decoder"
 
@@ -348,18 +351,18 @@ class InferenceAgent:
 			seed		= seed
 		)['d_hat']
 		end_inf = time.time()
-		print(f"> [#{run_mode}] Inference completed () in {end_inf - start_inf:.2f} seconds.")
+		print(f"[cyan]> [#{run_mode}] Inference completed () in [bold]{end_inf - start_inf:.2f}[/bold] seconds.[/cyan]")
 		if d_hat.dim() == 4:
 			n_frames = d_hat.shape[0]
 		else:
 			n_frames = d_hat.shape[1] if d_hat.dim() == 5 else 1
-		print(f"> [#{run_mode}] Inference FPS = {n_frames / (end_inf - start_inf):.2f} frames/sec.")
+		print(f"[cyan]> [#{run_mode}] Inference FPS = [bold]{n_frames / (end_inf - start_inf):.2f}[/bold] frames/sec.[/cyan]")
 
 		start_save = time.time()
 		res_video_path = self.save_video(d_hat, res_video_path, audio_path)
 		end_save = time.time()
-		print(f"> [#{run_mode}] Video saving completed in {end_save - start_save:.2f} seconds.")
-		print(f"> [Done] result saved at {res_video_path}")
+		print(f"[cyan]> [#{run_mode}] Video saving completed in [bold]{end_save - start_save:.2f}[/bold] seconds.[/cyan]")
+		print(f"[green]> [Done] result saved at {res_video_path}[/green]")
 		return res_video_path, {'n_frames': n_frames, 'mode': run_mode}
 
 
@@ -420,8 +423,8 @@ if __name__ == '__main__':
 			)
 		end = time.time()
 		run_mode = misc.get('mode', 'UNKNOWN')
-		print(f"> [#{run_mode}] Total execution (Preprocess + {run_mode} + Save) time: {end - start:.2f} seconds.")
-		print(f"> [#{run_mode}] Total execution FPS = {misc['n_frames'] / (end - start):.2f} frames/sec.")
+		print(f"[bold green]> [#{run_mode}] Total execution (Preprocess + {run_mode} + Save) time: {end - start:.2f} seconds.[/bold green]")
+		print(f"[bold green]> [#{run_mode}] Total execution FPS = {misc['n_frames'] / (end - start):.2f} frames/sec.[/bold green]")
 	finally:
 		if getattr(agent.G, 'context', None) is not None:
 			agent.G.context.pop()  # Clean up CUDA context after all done

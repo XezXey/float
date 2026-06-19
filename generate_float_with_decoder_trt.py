@@ -360,7 +360,7 @@ class InferenceAgent:
 			r_cfg_scale = r_cfg_scale,
 			e_cfg_scale = e_cfg_scale,
 			emo 		= emo,
-			nfe			= 1,
+			nfe			= nfe,
 			seed		= seed
 		)['d_hat']
 		end_inf = time.time()

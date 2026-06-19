@@ -189,4 +189,5 @@ python generate_student_with_decoder_trt.py \
 ## Result
 
 The output should look like this:
-![Result](../for_released/output/comparison.gif)
+
+![Result](./comparison.gif)

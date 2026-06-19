@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """
+[#] 17 June 2026
+====================================================================
 export_onnx.py
 ====================================================================
 Loads the pre-trained FLOAT PyTorch model, wraps the FlowMatchingTransformer
@@ -12,6 +14,9 @@ import os
 import sys
 import argparse
 import torch
+from rich.console import Console
+console = Console()
+print = console.print
 
 # Ensure the root folder and tensorrt folder are in the Python search path
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -72,6 +77,12 @@ def main():
         action="store_true",
         help="Disable dynamic batch size dimensions",
     )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        default=False,
+        help="Enable verbose logging"
+    )
     
     # Add default options from the base FLOAT model arguments
     parser = add_model_args(parser)
@@ -95,24 +106,24 @@ def main():
         print(f"Error: Checkpoint file not found at '{args.ckpt_path}'. Please make sure float.pth exists.")
         sys.exit(1)
         
-    wrapper = load_fmt_wrapper(args, device)
+    fmt_wrapper = load_fmt_wrapper(args, device)
     
     # 3. Create dummy inputs matching the FMTWrapper forward signature
     # Signature: forward(t, x, wa, wr, we, prev_x, prev_wa)
-    print(f"Generating dummy inputs with batch size = {args.batch_size}...")
+    print(f"[cyan]\[#] Generating dummy inputs with batch size = {args.batch_size}...")
     dummy_inputs = build_dummy_inputs(args, device, batch=args.batch_size)
     
     t, x, wa, wr, we, prev_x, prev_wa, a_cfg_scale, e_cfg_scale = dummy_inputs
-    print(f"Input shapes:")
-    print(f"  t       : {list(t.shape)}")
-    print(f"  x       : {list(x.shape)}")
-    print(f"  wa      : {list(wa.shape)}")
-    print(f"  wr      : {list(wr.shape)}")
-    print(f"  we      : {list(we.shape)}")
-    print(f"  prev_x  : {list(prev_x.shape)}")
-    print(f"  prev_wa : {list(prev_wa.shape)}")
-    print(f"  a_cfg_scale : {a_cfg_scale.item()}")
-    print(f"  e_cfg_scale : {e_cfg_scale.item()}")
+    print(f"[cyan]\[#] Input shapes:")
+    print(f"[cyan]  t       : {list(t.shape)}")
+    print(f"[cyan]  x       : {list(x.shape)}")
+    print(f"[cyan]  wa      : {list(wa.shape)}")
+    print(f"[cyan]  wr      : {list(wr.shape)}")
+    print(f"[cyan]  we      : {list(we.shape)}")
+    print(f"[cyan]  prev_x  : {list(prev_x.shape)}")
+    print(f"[cyan]  prev_wa : {list(prev_wa.shape)}")
+    print(f"[cyan]  a_cfg_scale : {a_cfg_scale.item()}")
+    print(f"[cyan]  e_cfg_scale : {e_cfg_scale.item()}")
 
     # 4. Define input names, output names, and dynamic axes
     input_names = ["t", "x", "wa", "wr", "we", "prev_x", "prev_wa", "a_cfg_scale", "e_cfg_scale"]
@@ -138,7 +149,7 @@ def main():
     # 5. Perform ONNX export
     print(f"Exporting model to ONNX format (opset_version={args.opset})...")
     torch.onnx.export(
-        wrapper,
+        fmt_wrapper,
         dummy_inputs,
         output_path,
         export_params=True,

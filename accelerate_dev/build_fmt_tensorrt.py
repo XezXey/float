@@ -9,11 +9,14 @@ Supports FP32, FP16, TF32, and FP8 precision modes.
 Configures dynamic batch profiles for all inputs.
 """
 
-
 import tensorrt as trt
 import argparse
 import onnx
 import os
+from rich.console import Console
+console = Console()
+print = console.print
+
 parser = argparse.ArgumentParser(description="Build TensorRT engine from ONNX model")
 parser.add_argument(
     "--onnx_path",

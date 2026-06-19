@@ -1,5 +1,12 @@
 """
-	Inference Stage 2 - Flexible (PyTorch / TensorRT / Decoder-only TRT)
+[#] 17 June 2026
+====================================================================
+generate_with_decoder_tensorrt.py
+====================================================================
+This scripts perform the inference of FLOAT pipeline using TensorRT engine applied to FLOAT's decoder only
+- Able to run with/without TensorRT engine for FLOAT's decoder
+ 
+Main purpose: Use to experiment the performance gain of TensorRT engine for FLOAT's decoder only.
 """
 
 import os, torch, random, cv2, torchvision, subprocess, librosa, datetime, tempfile, face_alignment, math
@@ -10,6 +17,7 @@ import albumentations.pytorch.transforms as A_pytorch
 from torchdiffeq import odeint
 
 import time
+import rich
 from tqdm import tqdm
 from pathlib import Path
 from transformers import Wav2Vec2FeatureExtractor

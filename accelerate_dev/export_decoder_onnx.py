@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """
+[#] 17 June 2026
+====================================================================
 export_decoder_onnx.py
 ====================================================================
 Loads the pre-trained FLOAT PyTorch model, wraps the Synthesis decoder (dec)

@@ -121,7 +121,7 @@ def text_to_speech_samples(text: str, sampling_rate=16000) -> np.ndarray:
             return samples.astype(np.float32)
 
 def producer_thread_func():
-    """Background daemon thread running the autoregressive inference loop."""
+    """Background thread running the autoregressive inference loop."""
     global avatar_data, pipeline, hidden_states, chunk_counter, client_playing_chunk_id, generated_chunks_history, last_produced_text_id
     
     print("[Producer] Waiting for pipeline initialization...")
